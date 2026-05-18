@@ -415,3 +415,57 @@ class TestTestingChecks:
     def test_ci_runs_tests_fails_without_ci(self, tmp_path: Path) -> None:
         results = self.check.run(tmp_path, _LANG_PYTHON)
         assert not _result(results, "ci_runs_tests").passed
+
+    # Coverage configured
+    def test_coverage_configured_via_pyproject(self, tmp_path: Path) -> None:
+        (tmp_path / "pyproject.toml").write_text("[tool.coverage.run]\nsource = [\"src\"]\n")
+        checks = TestingChecks()
+        result = checks._check_coverage_configured(tmp_path, "python")
+        assert result.passed is True
+
+    def test_coverage_not_configured(self, tmp_path: Path) -> None:
+        checks = TestingChecks()
+        result = checks._check_coverage_configured(tmp_path, "python")
+        assert result.passed is False
+
+    def test_coverage_configured_via_jest_config(self, tmp_path: Path) -> None:
+        (tmp_path / "jest.config.js").write_text("module.exports = { coverage: { provider: 'v8' } };\n")
+        checks = TestingChecks()
+        result = checks._check_coverage_configured(tmp_path, "typescript")
+        assert result.passed is True
+
+    # Integration tests
+    def test_integration_tests_found_by_dir(self, tmp_path: Path) -> None:
+        (tmp_path / "tests" / "integration").mkdir(parents=True)
+        checks = TestingChecks()
+        result = checks._check_integration_tests(tmp_path)
+        assert result.passed is True
+
+    def test_integration_tests_not_found(self, tmp_path: Path) -> None:
+        (tmp_path / "tests").mkdir()
+        checks = TestingChecks()
+        result = checks._check_integration_tests(tmp_path)
+        assert result.passed is False
+
+    # Test ratio
+    def test_ratio_passes_when_sufficient(self, tmp_path: Path) -> None:
+        src = tmp_path / "src"
+        src.mkdir()
+        for i in range(5):
+            (src / f"module_{i}.py").write_text("def foo(): pass\n")
+        tests = tmp_path / "tests"
+        tests.mkdir()
+        (tests / "test_module_0.py").write_text("def test_foo(): pass\n")
+        checks = TestingChecks()
+        result = checks._check_test_ratio(tmp_path, "python")
+        assert result.passed is True
+
+    def test_ratio_fails_when_low(self, tmp_path: Path) -> None:
+        src = tmp_path / "src"
+        src.mkdir()
+        for i in range(20):
+            (src / f"module_{i}.py").write_text("def foo(): pass\n")
+        # no tests
+        checks = TestingChecks()
+        result = checks._check_test_ratio(tmp_path, "python")
+        assert result.passed is False

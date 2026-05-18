@@ -13,6 +13,12 @@ from repoaudit.checks.base import Check, CheckResult
 
 _CATEGORY = "testing"
 
+# Directories to skip when searching recursively.
+_SKIP_DIRS = {
+    "build", "target", "dist", "out", "bin", "obj", ".gradle",
+    "node_modules", ".venv", "venv", "__pycache__", ".git",
+}
+
 # Patterns that suggest behaviour-driven test naming.
 _BEHAVIOR_TEST_RE = re.compile(
     r"(?:def test_should_|def test_when_|def test_given_|it\(|describe\(|should\()",
@@ -29,6 +35,9 @@ class TestingChecks(Check):
         return [
             self._check_tests_exist(repo_path),
             self._check_test_config(repo_path, lang),
+            self._check_coverage_configured(repo_path, lang),
+            self._check_integration_tests(repo_path),
+            self._check_test_ratio(repo_path, lang),
             self._check_tests_named_for_behavior(repo_path, lang),
             self._check_ci_exists(ci_files),
             self._check_ci_runs_tests(ci_files),
@@ -239,6 +248,379 @@ class TestingChecks(Check):
             severity="recommended",
             message="No vitest.config.* or jest.config.* found",
             detail="Add a vitest.config.ts or jest.config.js to configure your test runner.",
+        )
+
+    def _check_coverage_configured(self, repo_path: Path, lang: str) -> CheckResult:
+        """Check that coverage reporting is configured for this repo."""
+        # --- Artifact files that prove coverage has been generated ---
+        for name in (".coverage", "coverage.xml"):
+            if (repo_path / name).exists():
+                return CheckResult(
+                    name="coverage_configured",
+                    category=_CATEGORY,
+                    passed=True,
+                    severity="recommended",
+                    message=f"Coverage configured (artifact found: {name})",
+                )
+        if (repo_path / "htmlcov").is_dir():
+            return CheckResult(
+                name="coverage_configured",
+                category=_CATEGORY,
+                passed=True,
+                severity="recommended",
+                message="Coverage configured (htmlcov/ directory found)",
+            )
+        for pattern in ("lcov.info", "clover.xml"):
+            matches = [
+                p for p in repo_path.rglob(pattern)
+                if not any(s in p.parts for s in _SKIP_DIRS)
+            ]
+            if matches:
+                return CheckResult(
+                    name="coverage_configured",
+                    category=_CATEGORY,
+                    passed=True,
+                    severity="recommended",
+                    message=f"Coverage configured (artifact found: {matches[0].name})",
+                )
+
+        # --- Config-file signals ---
+        pyproject = repo_path / "pyproject.toml"
+        if pyproject.exists():
+            text = pyproject.read_text(encoding="utf-8", errors="ignore")
+            if "[tool.coverage" in text:
+                return CheckResult(
+                    name="coverage_configured",
+                    category=_CATEGORY,
+                    passed=True,
+                    severity="recommended",
+                    message="Coverage configured via pyproject.toml",
+                )
+
+        setup_cfg = repo_path / "setup.cfg"
+        if setup_cfg.exists():
+            text = setup_cfg.read_text(encoding="utf-8", errors="ignore")
+            if "[coverage:" in text:
+                return CheckResult(
+                    name="coverage_configured",
+                    category=_CATEGORY,
+                    passed=True,
+                    severity="recommended",
+                    message="Coverage configured via setup.cfg",
+                )
+
+        pytest_ini = repo_path / "pytest.ini"
+        if pytest_ini.exists():
+            text = pytest_ini.read_text(encoding="utf-8", errors="ignore")
+            if "[pytest]" in text and "--cov" in text:
+                return CheckResult(
+                    name="coverage_configured",
+                    category=_CATEGORY,
+                    passed=True,
+                    severity="recommended",
+                    message="Coverage configured via pytest.ini (--cov in addopts)",
+                )
+
+        for pattern in ("jest.config.*", "vitest.config.*"):
+            for cfg_file in repo_path.glob(pattern):
+                try:
+                    text = cfg_file.read_text(encoding="utf-8", errors="ignore")[:4096]
+                except OSError:
+                    continue
+                if "coverage" in text:
+                    return CheckResult(
+                        name="coverage_configured",
+                        category=_CATEGORY,
+                        passed=True,
+                        severity="recommended",
+                        message=f"Coverage configured via {cfg_file.name}",
+                    )
+
+        for pattern in ("build.gradle.kts", "build.gradle"):
+            gradle = repo_path / pattern
+            if gradle.exists():
+                text = gradle.read_text(encoding="utf-8", errors="ignore")
+                if "jacoco" in text or "kover" in text:
+                    return CheckResult(
+                        name="coverage_configured",
+                        category=_CATEGORY,
+                        passed=True,
+                        severity="recommended",
+                        message=f"Coverage configured via {pattern} (jacoco/kover)",
+                    )
+
+        for csproj in repo_path.rglob("*.csproj"):
+            if any(s in csproj.parts for s in _SKIP_DIRS):
+                continue
+            try:
+                text = csproj.read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                continue
+            if "coverlet" in text:
+                return CheckResult(
+                    name="coverage_configured",
+                    category=_CATEGORY,
+                    passed=True,
+                    severity="recommended",
+                    message=f"Coverage configured via {csproj.name} (coverlet)",
+                )
+
+        ci_files: list[Path] = []
+        gha_dir = repo_path / ".github" / "workflows"
+        if gha_dir.is_dir():
+            ci_files.extend(gha_dir.glob("*.yml"))
+            ci_files.extend(gha_dir.glob("*.yaml"))
+        gitlab = repo_path / ".gitlab-ci.yml"
+        if gitlab.exists():
+            ci_files.append(gitlab)
+        for ci_file in ci_files:
+            try:
+                text = ci_file.read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                continue
+            if "coverage" in text or "--cov" in text:
+                return CheckResult(
+                    name="coverage_configured",
+                    category=_CATEGORY,
+                    passed=True,
+                    severity="recommended",
+                    message=f"Coverage configured in CI ({ci_file.name})",
+                )
+
+        return CheckResult(
+            name="coverage_configured",
+            category=_CATEGORY,
+            passed=False,
+            severity="recommended",
+            message="No coverage configuration found",
+            detail=(
+                "Add coverage reporting (e.g. pytest-cov, jacoco, coverlet) "
+                "to track test completeness."
+            ),
+        )
+
+    def _check_integration_tests(self, repo_path: Path) -> CheckResult:
+        """Check for the presence of integration or e2e tests."""
+        integration_dir_names = {
+            "integration", "integration_tests", "e2e", "e2e_tests",
+            "contract", "functional",
+        }
+
+        # Check root-level directories.
+        for d in repo_path.iterdir():
+            if d.is_dir() and d.name.lower() in integration_dir_names:
+                return CheckResult(
+                    name="integration_tests_exist",
+                    category=_CATEGORY,
+                    passed=True,
+                    severity="optional",
+                    message=f"Integration/e2e tests found: {d.name}/",
+                )
+
+        # Check under tests/ and test/.
+        for parent_name in ("tests", "test"):
+            parent = repo_path / parent_name
+            if parent.is_dir():
+                for d in parent.iterdir():
+                    if d.is_dir() and d.name.lower() in integration_dir_names:
+                        return CheckResult(
+                            name="integration_tests_exist",
+                            category=_CATEGORY,
+                            passed=True,
+                            severity="optional",
+                            message=f"Integration/e2e tests found: {parent_name}/{d.name}/",
+                        )
+
+        # Check for integration/e2e test files by name pattern.
+        integration_file_re = re.compile(
+            r"(?:integration|e2e)",
+            re.IGNORECASE,
+        )
+        extensions = (".py", ".ts", ".kt", ".cs")
+        for p in repo_path.rglob("*"):
+            if any(s in p.parts for s in _SKIP_DIRS):
+                continue
+            if not p.is_file():
+                continue
+            if p.suffix not in extensions:
+                continue
+            # Match by filename containing integration/e2e.
+            if integration_file_re.search(p.stem):
+                rel = p.relative_to(repo_path)
+                return CheckResult(
+                    name="integration_tests_exist",
+                    category=_CATEGORY,
+                    passed=True,
+                    severity="optional",
+                    message=f"Integration/e2e tests found: {rel}",
+                )
+            # Match by path segment.
+            parts_lower = [part.lower() for part in p.parts]
+            if "integration" in parts_lower or "e2e" in parts_lower:
+                rel = p.relative_to(repo_path)
+                return CheckResult(
+                    name="integration_tests_exist",
+                    category=_CATEGORY,
+                    passed=True,
+                    severity="optional",
+                    message=f"Integration/e2e tests found: {rel}",
+                )
+
+        return CheckResult(
+            name="integration_tests_exist",
+            category=_CATEGORY,
+            passed=False,
+            severity="optional",
+            message="No integration or e2e tests detected",
+            detail=(
+                "Consider adding integration tests that verify behaviour "
+                "across service boundaries."
+            ),
+        )
+
+    def _check_test_ratio(self, repo_path: Path, lang: str) -> CheckResult:
+        """Check that the test-to-source file ratio is at least 1:10."""
+        _skip = _SKIP_DIRS | {"tests", "test", "migrations", "__pycache__"}
+
+        def _rglob_skip(root: Path, pattern: str, extra_skip: set[str] | None = None) -> list[Path]:
+            skip = _skip | (extra_skip or set())
+            return [
+                p for p in root.rglob(pattern)
+                if p.is_file() and not any(s in p.parts for s in skip)
+            ]
+
+        # --- Source file counting ---
+        if "python" in lang:
+            src_root = repo_path / "src"
+            if src_root.is_dir():
+                source_files = _rglob_skip(src_root, "*.py")
+            else:
+                source_files = _rglob_skip(repo_path, "*.py", {"tests", "test", "migrations"})
+        elif lang in ("typescript", "typescript_react", "typescript_next"):
+            src_root = repo_path / "src"
+            if src_root.is_dir():
+                source_files = [
+                    p for p in _rglob_skip(src_root, "*.ts") + _rglob_skip(src_root, "*.tsx")
+                    if ".test." not in p.name and ".spec." not in p.name
+                ]
+            else:
+                source_files = []
+        elif lang in ("kotlin", "kotlin_spring"):
+            src_main = repo_path / "src" / "main"
+            source_files = _rglob_skip(src_main, "*.kt") if src_main.is_dir() else []
+        elif lang == "dotnet":
+            src_root = repo_path / "src"
+            if src_root.is_dir():
+                source_files = [
+                    p for p in _rglob_skip(src_root, "*.cs")
+                    if "Tests" not in p.parts and "Test" not in p.parent.name
+                ]
+            else:
+                source_files = []
+        elif lang == "go":
+            source_files = [
+                p for p in _rglob_skip(repo_path, "*.go")
+                if not p.name.endswith("_test.go")
+            ]
+        elif lang == "nodejs":
+            src_root = repo_path / "src"
+            if src_root.is_dir():
+                source_files = [
+                    p for p in _rglob_skip(src_root, "*.js")
+                    if ".test." not in p.name and ".spec." not in p.name
+                ]
+            else:
+                source_files = []
+        else:
+            return CheckResult(
+                name="test_ratio",
+                category=_CATEGORY,
+                passed=True,
+                severity="optional",
+                message="Language not recognised — skipping ratio check",
+            )
+
+        if len(source_files) < 3:
+            return CheckResult(
+                name="test_ratio",
+                category=_CATEGORY,
+                passed=True,
+                severity="optional",
+                message="Too few source files to compute ratio",
+            )
+
+        # --- Test file counting (mirrors _check_tests_exist patterns) ---
+        test_patterns: list[tuple[Path, str]] = []
+        if "python" in lang:
+            for td in (repo_path / "tests", repo_path / "test"):
+                if td.is_dir():
+                    test_patterns.append((td, "test_*.py"))
+        elif lang in ("typescript", "typescript_react", "typescript_next"):
+            for pattern in ("*.test.ts", "*.spec.ts", "*.test.tsx", "*.spec.tsx"):
+                test_patterns.append((repo_path, pattern))
+        elif lang in ("kotlin", "kotlin_spring"):
+            src_test = repo_path / "src" / "test"
+            if src_test.is_dir():
+                test_patterns.append((src_test, "*.kt"))
+        elif lang == "dotnet":
+            # Collect .cs files from directories whose name contains Test.
+            test_files_direct = [
+                p for p in repo_path.rglob("*.cs")
+                if not any(s in p.parts for s in _SKIP_DIRS)
+                and ("Tests" in p.parts or "Test" in p.parent.name)
+            ]
+            source_count = len(source_files)
+            test_count = len(test_files_direct)
+            ratio = test_count / source_count
+            passed = ratio >= 0.1
+            return CheckResult(
+                name="test_ratio",
+                category=_CATEGORY,
+                passed=passed,
+                severity="optional",
+                message=f"Test/source ratio: {test_count}/{source_count} ({ratio:.0%})",
+                detail=(
+                    ""
+                    if passed
+                    else (
+                        "Low test coverage signal: fewer than 1 test file per 10 source files. "
+                        "Consider adding more tests."
+                    )
+                ),
+            )
+        elif lang == "go":
+            test_patterns.append((repo_path, "*_test.go"))
+        elif lang == "nodejs":
+            for td in (repo_path / "tests", repo_path / "test"):
+                if td.is_dir():
+                    test_patterns.append((td, "*.test.js"))
+                    test_patterns.append((td, "*.spec.js"))
+
+        test_files: list[Path] = []
+        for root, pattern in test_patterns:
+            test_files.extend([
+                p for p in root.rglob(pattern)
+                if p.is_file() and not any(s in p.parts for s in _SKIP_DIRS)
+            ])
+
+        source_count = len(source_files)
+        test_count = len(test_files)
+        ratio = test_count / source_count
+        passed = ratio >= 0.1
+        return CheckResult(
+            name="test_ratio",
+            category=_CATEGORY,
+            passed=passed,
+            severity="optional",
+            message=f"Test/source ratio: {test_count}/{source_count} ({ratio:.0%})",
+            detail=(
+                ""
+                if passed
+                else (
+                    "Low test coverage signal: fewer than 1 test file per 10 source files. "
+                    "Consider adding more tests."
+                )
+            ),
         )
 
     def _check_tests_named_for_behavior(self, repo_path: Path, lang: str) -> CheckResult:
