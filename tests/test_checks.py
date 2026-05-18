@@ -282,6 +282,39 @@ class TestDevEx:
         _write(tmp_path, "requirements.txt", "requests==2.31.0\nhttpx==0.27.0\n")
         assert self.check._has_database(tmp_path) is False
 
+    def test_has_database_via_spring_application_yml(self, tmp_path: Path) -> None:
+        cfg = tmp_path / "src" / "main" / "resources"
+        cfg.mkdir(parents=True)
+        (cfg / "application.yml").write_text(
+            "spring:\n  datasource:\n    url: jdbc:postgresql://localhost/mydb\n"
+        )
+        assert self.check._has_database(tmp_path) is True
+
+    def test_has_database_via_alembic_ini(self, tmp_path: Path) -> None:
+        (tmp_path / "alembic.ini").write_text(
+            "[alembic]\nsqlalchemy.url = postgresql://localhost/mydb\n"
+        )
+        assert self.check._has_database(tmp_path) is True
+
+    def test_has_database_via_rails_database_yml(self, tmp_path: Path) -> None:
+        (tmp_path / "config").mkdir()
+        (tmp_path / "config" / "database.yml").write_text(
+            "default: &default\n  adapter: postgresql\n"
+        )
+        assert self.check._has_database(tmp_path) is True
+
+    def test_has_database_via_prisma_schema(self, tmp_path: Path) -> None:
+        (tmp_path / "prisma").mkdir()
+        (tmp_path / "prisma" / "schema.prisma").write_text(
+            'datasource db {\n  provider = "postgresql"\n  url = env("DATABASE_URL")\n}\n'
+        )
+        assert self.check._has_database(tmp_path) is True
+
+    def test_has_database_via_appsettings_json(self, tmp_path: Path) -> None:
+        data = {"ConnectionStrings": {"Default": "Server=localhost;Database=mydb;"}}
+        (tmp_path / "appsettings.json").write_text(json.dumps(data))
+        assert self.check._has_database(tmp_path) is True
+
     def test_local_setup_documented_passes_with_getting_started(self, tmp_path: Path) -> None:
         content = "# My App\n\n## Getting Started\n\nRun `docker compose up`.\n"
         _write(tmp_path, "README.md", content)

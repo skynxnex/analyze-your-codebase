@@ -80,7 +80,10 @@ class DevExChecks(Check):
             ),
         )
 
-    _SKIP_DIRS = frozenset({"build", "target", "dist", ".gradle", "node_modules", ".git"})
+    _SKIP_DIRS = frozenset({
+        "build", "target", "dist", "out", "bin", "obj",
+        ".gradle", "node_modules", ".venv", "venv", "__pycache__", ".git",
+    })
 
     _MIGRATION_DIRS = (
         "migrations",
@@ -141,6 +144,10 @@ class DevExChecks(Check):
 
         # Signal 4: env files with DB config keys
         if self._db_from_env(repo_path):
+            return True
+
+        # Signal 5: language-specific config files
+        if self._db_from_config_files(repo_path):
             return True
 
         return False
@@ -244,6 +251,70 @@ class DevExChecks(Check):
                         return True
                 except OSError:
                     pass
+        return False
+
+    def _db_from_config_files(self, repo_path: Path) -> bool:
+        """Return True if language-specific config files indicate a database."""
+        # Spring Boot — application.yml
+        for yml_file in repo_path.rglob("application.yml"):
+            if any(s in yml_file.parts for s in self._SKIP_DIRS):
+                continue
+            try:
+                text = yml_file.read_text(encoding="utf-8", errors="ignore")
+                if "spring.datasource" in text or "datasource:" in text:
+                    return True
+            except OSError:
+                pass
+
+        # Spring Boot — application.properties
+        for props_file in repo_path.rglob("application.properties"):
+            if any(s in props_file.parts for s in self._SKIP_DIRS):
+                continue
+            try:
+                text = props_file.read_text(encoding="utf-8", errors="ignore")
+                if "spring.datasource.url" in text:
+                    return True
+            except OSError:
+                pass
+
+        # Alembic — alembic.ini
+        alembic_ini = repo_path / "alembic.ini"
+        if alembic_ini.exists():
+            try:
+                text = alembic_ini.read_text(encoding="utf-8", errors="ignore")
+                if "sqlalchemy.url" in text:
+                    return True
+            except OSError:
+                pass
+
+        # Rails — config/database.yml (presence alone indicates a DB)
+        if (repo_path / "config" / "database.yml").exists():
+            return True
+
+        # Prisma — prisma/schema.prisma
+        prisma_schema = repo_path / "prisma" / "schema.prisma"
+        if prisma_schema.exists():
+            try:
+                text = prisma_schema.read_text(encoding="utf-8", errors="ignore")
+                if "datasource" in text:
+                    return True
+            except OSError:
+                pass
+
+        # .NET — appsettings*.json (repo root and src/**)
+        appsettings_candidates = list(repo_path.glob("appsettings*.json")) + list(
+            repo_path.glob("src/**/appsettings*.json")
+        )
+        for appsettings in appsettings_candidates[:10]:
+            if any(s in appsettings.parts for s in self._SKIP_DIRS):
+                continue
+            try:
+                text = appsettings.read_text(encoding="utf-8", errors="ignore")
+                if '"ConnectionStrings"' in text:
+                    return True
+            except OSError:
+                pass
+
         return False
 
     def _check_seed_script(self, repo_path: Path) -> CheckResult:
