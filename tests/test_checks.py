@@ -257,6 +257,31 @@ class TestDevEx:
         results = self.check.run(tmp_path, _LANG_PYTHON)
         assert not _result(results, "seed_script_exists").passed
 
+    def test_has_database_via_migrations_dir(self, tmp_path: Path) -> None:
+        (tmp_path / "migrations").mkdir()
+        assert self.check._has_database(tmp_path) is True
+
+    def test_has_database_via_flyway_sql(self, tmp_path: Path) -> None:
+        (tmp_path / "src" / "main" / "resources" / "db" / "migration").mkdir(parents=True)
+        _write(
+            tmp_path,
+            "src/main/resources/db/migration/V1__init.sql",
+            "CREATE TABLE foo (id INT);",
+        )
+        assert self.check._has_database(tmp_path) is True
+
+    def test_has_database_via_requirements(self, tmp_path: Path) -> None:
+        _write(tmp_path, "requirements.txt", "psycopg2==2.9.9\nrequests==2.31.0\n")
+        assert self.check._has_database(tmp_path) is True
+
+    def test_has_database_via_env_file(self, tmp_path: Path) -> None:
+        _write(tmp_path, ".env.example", "DATABASE_URL=postgres://localhost/mydb\nSECRET_KEY=changeme\n")
+        assert self.check._has_database(tmp_path) is True
+
+    def test_has_database_returns_false_when_no_signals(self, tmp_path: Path) -> None:
+        _write(tmp_path, "requirements.txt", "requests==2.31.0\nhttpx==0.27.0\n")
+        assert self.check._has_database(tmp_path) is False
+
     def test_local_setup_documented_passes_with_getting_started(self, tmp_path: Path) -> None:
         content = "# My App\n\n## Getting Started\n\nRun `docker compose up`.\n"
         _write(tmp_path, "README.md", content)
