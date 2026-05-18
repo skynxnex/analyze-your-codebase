@@ -14,6 +14,7 @@ import pytest
 from repoaudit.checks.ai_readiness import AIReadinessChecks
 from repoaudit.checks.devex import DevExChecks
 from repoaudit.checks.security import SecurityChecks
+from repoaudit.checks.service_security import ServiceSecurityChecks
 from repoaudit.checks.testing import TestingChecks
 
 _LANG_PYTHON = {"language": "python", "detected_by": ["requirements.txt"]}
@@ -529,3 +530,62 @@ class TestTestingChecks:
         checks = TestingChecks()
         result = checks._check_test_ratio(tmp_path, "python")
         assert result.passed is False
+
+
+# ===========================================================================
+# ServiceSecurity checks
+# ===========================================================================
+
+class TestServiceSecurityChecks:
+    def test_exposure_public_via_dockerfile(self, tmp_path: Path) -> None:
+        (tmp_path / "Dockerfile").write_text("FROM python:3.11\nEXPOSE 8000\n")
+        checks = ServiceSecurityChecks()
+        result = checks._check_exposure(tmp_path)
+        assert result.passed is True
+        assert "public" in result.message.lower()
+
+    def test_exposure_internal_no_signals(self, tmp_path: Path) -> None:
+        checks = ServiceSecurityChecks()
+        result = checks._check_exposure(tmp_path)
+        assert result.passed is True
+        assert "internal" in result.message.lower()
+
+    def test_service_auth_outbound_with_auth(self, tmp_path: Path) -> None:
+        (tmp_path / "client.py").write_text(
+            'response = requests.get(url, headers={"Authorization": f"Bearer {token}"})\n'
+        )
+        checks = ServiceSecurityChecks()
+        result = checks._check_service_to_service_auth(tmp_path, "python")
+        assert result.passed is True
+
+    def test_service_auth_outbound_without_auth(self, tmp_path: Path) -> None:
+        (tmp_path / "client.py").write_text(
+            "response = requests.get(url)\n"
+        )
+        checks = ServiceSecurityChecks()
+        result = checks._check_service_to_service_auth(tmp_path, "python")
+        assert result.passed is False
+
+    def test_sensitive_logging_detected(self, tmp_path: Path) -> None:
+        (tmp_path / "app.py").write_text(
+            'logger.info(f"User password: {password}")\n'
+        )
+        checks = ServiceSecurityChecks()
+        result = checks._check_sensitive_logging(tmp_path)
+        assert result.passed is False
+
+    def test_sensitive_logging_clean(self, tmp_path: Path) -> None:
+        (tmp_path / "app.py").write_text(
+            'logger.info(f"User logged in: {user_id}")\n'
+        )
+        checks = ServiceSecurityChecks()
+        result = checks._check_sensitive_logging(tmp_path)
+        assert result.passed is True
+
+    def test_secrets_via_env_detected(self, tmp_path: Path) -> None:
+        (tmp_path / "config.py").write_text(
+            'SECRET_KEY = os.environ["SECRET_KEY"]\n'
+        )
+        checks = ServiceSecurityChecks()
+        result = checks._check_secrets_via_env_not_code(tmp_path)
+        assert result.passed is True
