@@ -205,6 +205,66 @@ class TestSecurity:
 
 
 # ===========================================================================
+# New security checks (standalone, not via run())
+# ===========================================================================
+
+def test_auth_middleware_found_python(tmp_path: Path) -> None:
+    src = tmp_path / "app"
+    src.mkdir()
+    (src / "middleware.py").write_text(
+        "from rest_framework_simplejwt.authentication import JWTAuthentication\n"
+    )
+    checks = SecurityChecks()
+    result = checks._check_auth_middleware(tmp_path, "python")
+    assert result.passed is True
+
+
+def test_auth_middleware_not_found(tmp_path: Path) -> None:
+    (tmp_path / "app.py").write_text("def hello(): return 'world'\n")
+    checks = SecurityChecks()
+    result = checks._check_auth_middleware(tmp_path, "python")
+    assert result.passed is False
+
+
+def test_cors_wildcard_fails(tmp_path: Path) -> None:
+    (tmp_path / "settings.py").write_text("CORS_ALLOW_ALL_ORIGINS = True\n")
+    checks = SecurityChecks()
+    result = checks._check_cors(tmp_path, "python")
+    assert result.passed is False
+
+
+def test_cors_explicit_passes(tmp_path: Path) -> None:
+    (tmp_path / "settings.py").write_text(
+        "CORS_ALLOWED_ORIGINS = ['https://example.com']\n"
+    )
+    checks = SecurityChecks()
+    result = checks._check_cors(tmp_path, "python")
+    assert result.passed is True
+
+
+def test_dep_audit_found_in_ci(tmp_path: Path) -> None:
+    wf = tmp_path / ".github" / "workflows"
+    wf.mkdir(parents=True)
+    (wf / "ci.yml").write_text("- run: pip-audit\n")
+    checks = SecurityChecks()
+    result = checks._check_dep_audit_in_ci(tmp_path)
+    assert result.passed is True
+
+
+def test_dep_audit_not_found(tmp_path: Path) -> None:
+    checks = SecurityChecks()
+    result = checks._check_dep_audit_in_ci(tmp_path)
+    assert result.passed is False
+
+
+def test_https_redirect_found_in_dotnet(tmp_path: Path) -> None:
+    (tmp_path / "Program.cs").write_text("app.UseHttpsRedirection();\n")
+    checks = SecurityChecks()
+    result = checks._check_https_enforcement(tmp_path)
+    assert result.passed is True
+
+
+# ===========================================================================
 # DevEx checks
 # ===========================================================================
 

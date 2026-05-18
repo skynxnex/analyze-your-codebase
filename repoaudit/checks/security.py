@@ -55,11 +55,16 @@ class SecurityChecks(Check):
     """All security checks bundled into one group."""
 
     def run(self, repo_path: Path, language: dict) -> list[CheckResult]:
+        lang = language.get("language", "unknown")
         return [
             self._check_no_hardcoded_secrets(repo_path),
             self._check_no_dotenv_committed(repo_path),
             self._check_deps_pinned(repo_path, language),
             self._check_no_latest_docker(repo_path),
+            self._check_auth_middleware(repo_path, lang),
+            self._check_cors(repo_path, lang),
+            self._check_dep_audit_in_ci(repo_path),
+            self._check_https_enforcement(repo_path),
         ]
 
     def _check_no_hardcoded_secrets(self, repo_path: Path) -> CheckResult:
@@ -317,6 +322,320 @@ class SecurityChecks(Check):
                 ""
                 if passed
                 else "Pin Docker images to specific versions (e.g. python:3.11-slim, not python:latest)."
+            ),
+        )
+
+    def _check_auth_middleware(self, repo_path: Path, lang: str) -> CheckResult:
+        """Check whether authentication patterns exist in source files."""
+        patterns_by_lang: dict[str, list[str]] = {
+            "python": [
+                "jwt", "JWTAuthentication", "IsAuthenticated", "@login_required",
+                "@require_auth", "Authorization", "Bearer", "oauth", "authenticate",
+            ],
+            "kotlin": [
+                "@PreAuthorize", "SecurityConfig", "JwtFilter",
+                "UsernamePasswordAuthenticationToken",
+                "BearerTokenAuthenticationFilter", "oauth2ResourceServer",
+                "httpSecurity",
+            ],
+            "dotnet": [
+                "[Authorize]", "JwtBearer", "AddAuthentication",
+                "RequireAuthorization", "IAuthenticationHandler",
+            ],
+            "typescript": [
+                "passport", "jwt.verify", "jsonwebtoken", "@UseGuards",
+                "AuthGuard", "bearerAuth",
+            ],
+            "javascript": [
+                "passport", "jwt.verify", "jsonwebtoken", "@UseGuards",
+                "AuthGuard", "bearerAuth",
+            ],
+            "go": ["jwt", "middleware", "Authorization", "Bearer", "auth"],
+        }
+
+        # Resolve which pattern list to use (partial match on lang string).
+        patterns: list[str] = []
+        for key, pat_list in patterns_by_lang.items():
+            if key in lang:
+                patterns = pat_list
+                break
+        # Fallback: search all patterns if language unknown.
+        if not patterns:
+            patterns = [p for pats in patterns_by_lang.values() for p in pats]
+
+        extensions_by_lang: dict[str, set[str]] = {
+            "python": {".py"},
+            "kotlin": {".kt"},
+            "dotnet": {".cs"},
+            "typescript": {".ts", ".js"},
+            "javascript": {".ts", ".js"},
+            "go": {".go"},
+        }
+        scan_exts: set[str] = set()
+        for key, exts in extensions_by_lang.items():
+            if key in lang:
+                scan_exts = exts
+                break
+        if not scan_exts:
+            scan_exts = {".py", ".kt", ".cs", ".ts", ".js", ".go"}
+
+        _skip = _SKIP_DIRS | {"tests", "test", "__tests__", "spec"}
+        files_scanned = 0
+        for path in repo_path.rglob("*"):
+            if path.is_dir():
+                continue
+            if any(skip in path.parts for skip in _skip):
+                continue
+            if path.suffix.lower() not in scan_exts:
+                continue
+            if files_scanned >= 50:
+                break
+            try:
+                text = path.read_bytes()[:8192].decode("utf-8", errors="ignore")
+            except OSError:
+                continue
+            files_scanned += 1
+            if any(pat in text for pat in patterns):
+                return CheckResult(
+                    name="auth_middleware",
+                    category=_CATEGORY,
+                    passed=True,
+                    severity="recommended",
+                    message="Auth patterns detected in source code",
+                )
+
+        return CheckResult(
+            name="auth_middleware",
+            category=_CATEGORY,
+            passed=False,
+            severity="recommended",
+            message="No authentication patterns detected",
+            detail=(
+                "No JWT/OAuth/session auth patterns found. "
+                "If this service has public endpoints, add authentication middleware."
+            ),
+        )
+
+    def _check_cors(self, repo_path: Path, lang: str) -> CheckResult:
+        """Check for CORS configuration, flagging wildcard CORS as a failure."""
+        cors_patterns = [
+            "CORS", "cors", "CorsPolicy", "AllowedOrigins",
+            "Access-Control-Allow-Origin", "@CrossOrigin",
+        ]
+        wildcard_patterns = [
+            re.compile(r"CORS_ALLOW_ALL_ORIGINS\s*=\s*True"),
+            re.compile(r"Access-Control-Allow-Origin['\"]?\s*[,:]\s*['\"]?\*"),
+            re.compile(r"AllowAnyOrigin\(\)"),
+            # Catch "*" appearing on same line as cors/CORS/origin keywords.
+            re.compile(r"(?:cors|CORS|origin|Origin).*['\"]?\*['\"]?"),
+        ]
+
+        _skip = _SKIP_DIRS | {"tests", "test", "__tests__", "spec"}
+
+        source_exts = {".py", ".kt", ".cs", ".ts", ".js", ".go", ".java"}
+        config_names = {
+            "appsettings.json", "application.yml", "application.properties",
+            "settings.py",
+        }
+
+        found_cors = False
+        found_wildcard = False
+
+        for path in repo_path.rglob("*"):
+            if path.is_dir():
+                continue
+            if any(skip in path.parts for skip in _skip):
+                continue
+            if path.suffix.lower() not in source_exts and path.name not in config_names:
+                continue
+            try:
+                text = path.read_bytes()[:8192].decode("utf-8", errors="ignore")
+            except OSError:
+                continue
+
+            has_cors = any(pat in text for pat in cors_patterns)
+            if not has_cors:
+                continue
+
+            found_cors = True
+            if any(wp.search(text) for wp in wildcard_patterns):
+                found_wildcard = True
+                break
+
+        if found_wildcard:
+            return CheckResult(
+                name="cors_configured",
+                category=_CATEGORY,
+                passed=False,
+                severity="optional",
+                message="Wildcard CORS detected — allows any origin",
+                detail="Replace wildcard CORS with an explicit allowlist of trusted origins.",
+            )
+        if found_cors:
+            return CheckResult(
+                name="cors_configured",
+                category=_CATEGORY,
+                passed=True,
+                severity="optional",
+                message="CORS configuration found",
+            )
+        return CheckResult(
+            name="cors_configured",
+            category=_CATEGORY,
+            passed=True,
+            severity="optional",
+            message="No CORS configuration detected (may not be needed for internal APIs)",
+        )
+
+    def _check_dep_audit_in_ci(self, repo_path: Path) -> CheckResult:
+        """Check whether a dependency vulnerability audit runs in CI."""
+        audit_tools = [
+            "pip-audit", "safety", "npm audit", "yarn audit",
+            "trivy", "snyk", "dependabot", "grype", "osvscanner",
+        ]
+
+        # Check dependabot config files first.
+        dependabot_paths = [
+            repo_path / ".github" / "dependabot.yml",
+            repo_path / ".github" / "dependabot.yaml",
+        ]
+        for dep_path in dependabot_paths:
+            if dep_path.exists():
+                return CheckResult(
+                    name="dep_audit_in_ci",
+                    category=_CATEGORY,
+                    passed=True,
+                    severity="recommended",
+                    message="Dependency audit found in CI: dependabot",
+                )
+
+        # Search CI workflow files.
+        ci_files: list[Path] = []
+        github_wf = repo_path / ".github" / "workflows"
+        if github_wf.is_dir():
+            ci_files.extend(github_wf.glob("*.yml"))
+            ci_files.extend(github_wf.glob("*.yaml"))
+        gitlab_ci = repo_path / ".gitlab-ci.yml"
+        if gitlab_ci.exists():
+            ci_files.append(gitlab_ci)
+
+        for ci_file in ci_files:
+            try:
+                text = ci_file.read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                continue
+            for tool in audit_tools:
+                if tool in text:
+                    return CheckResult(
+                        name="dep_audit_in_ci",
+                        category=_CATEGORY,
+                        passed=True,
+                        severity="recommended",
+                        message=f"Dependency audit found in CI: {tool}",
+                    )
+
+        return CheckResult(
+            name="dep_audit_in_ci",
+            category=_CATEGORY,
+            passed=False,
+            severity="recommended",
+            message="No dependency audit in CI",
+            detail=(
+                "Add pip-audit, npm audit, or trivy to CI to catch "
+                "known CVEs in dependencies."
+            ),
+        )
+
+    def _check_https_enforcement(self, repo_path: Path) -> CheckResult:
+        """Check whether HTTPS is enforced at the application or Docker layer."""
+        # --- .NET: look for UseHttpsRedirection in C# source files ---
+        for cs_file in repo_path.rglob("*.cs"):
+            if any(skip in cs_file.parts for skip in _SKIP_DIRS):
+                continue
+            try:
+                text = cs_file.read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                continue
+            if "UseHttpsRedirection" in text:
+                return CheckResult(
+                    name="https_enforced",
+                    category=_CATEGORY,
+                    passed=True,
+                    severity="optional",
+                    message="HTTPS enforcement detected",
+                )
+
+        # --- Django: check settings.py for SECURE_SSL_REDIRECT ---
+        for settings_file in repo_path.rglob("settings.py"):
+            if any(skip in settings_file.parts for skip in _SKIP_DIRS):
+                continue
+            try:
+                text = settings_file.read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                continue
+            if "SECURE_SSL_REDIRECT = True" in text:
+                return CheckResult(
+                    name="https_enforced",
+                    category=_CATEGORY,
+                    passed=True,
+                    severity="optional",
+                    message="HTTPS enforcement detected",
+                )
+            if "SECURE_SSL_REDIRECT = False" in text:
+                return CheckResult(
+                    name="https_enforced",
+                    category=_CATEGORY,
+                    passed=False,
+                    severity="optional",
+                    message="Only HTTP detected — no HTTPS redirect or SSL termination found",
+                    detail=(
+                        "Ensure HTTPS is enforced, either at the load balancer level "
+                        "or in application code."
+                    ),
+                )
+
+        # --- Docker / docker-compose: check for port 80 with no 443/https ---
+        docker_files = list(repo_path.glob("Dockerfile*")) + list(
+            repo_path.glob("docker-compose*.yml")
+        ) + list(repo_path.glob("docker-compose*.yaml"))
+
+        http_only = False
+        for df in docker_files:
+            try:
+                text = df.read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                continue
+            has_80 = bool(
+                re.search(r"EXPOSE\s+80\b", text)
+                or re.search(r"['\"]?80:", text)
+            )
+            has_443_or_https = bool(
+                re.search(r"443", text) or re.search(r"https", text, re.IGNORECASE)
+            )
+            if has_80 and not has_443_or_https:
+                http_only = True
+
+        if http_only:
+            return CheckResult(
+                name="https_enforced",
+                category=_CATEGORY,
+                passed=False,
+                severity="optional",
+                message="Only HTTP detected — no HTTPS redirect or SSL termination found",
+                detail=(
+                    "Ensure HTTPS is enforced, either at the load balancer level "
+                    "or in application code."
+                ),
+            )
+
+        return CheckResult(
+            name="https_enforced",
+            category=_CATEGORY,
+            passed=True,
+            severity="optional",
+            message=(
+                "HTTPS posture unclear — likely terminated at load balancer "
+                "(acceptable for internal services)"
             ),
         )
 
