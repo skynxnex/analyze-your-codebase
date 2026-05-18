@@ -290,6 +290,65 @@ details[open] > summary {
   border-top: 1px solid #f1f3f5;
 }
 
+/* --- Testing / Security pattern sections --- */
+.gap-item {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+  padding: 0.375rem 0;
+  border-bottom: 1px solid #f1f3f5;
+}
+.gap-item:last-of-type { border-bottom: none; }
+.gap-label {
+  font-weight: 600;
+  font-size: 0.875rem;
+  min-width: 220px;
+  flex-shrink: 0;
+}
+.gap-repos {
+  font-size: 0.8125rem;
+  color: #495057;
+  font-family: ui-monospace, "Cascadia Code", "Source Code Pro",
+    Menlo, Consolas, monospace;
+}
+.pattern-summary {
+  margin-top: 0.875rem;
+  font-size: 0.875rem;
+  color: #6c757d;
+  font-style: italic;
+}
+
+/* --- Language security gaps --- */
+.lang-gap {
+  padding: 0.75rem 0;
+  border-bottom: 1px solid #f1f3f5;
+}
+.lang-gap:last-child { border-bottom: none; }
+.lang-badge {
+  display: inline-block;
+  font-size: 0.75rem;
+  font-weight: 700;
+  padding: 0.15em 0.55em;
+  border-radius: 3px;
+  background: #e7f5ff;
+  color: #1864ab;
+  margin-right: 0.5rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.lang-repos {
+  font-size: 0.8125rem;
+  color: #6c757d;
+  font-family: ui-monospace, "Cascadia Code", "Source Code Pro",
+    Menlo, Consolas, monospace;
+  margin-top: 0.25rem;
+}
+.lang-gap ul {
+  margin: 0.375rem 0 0 1.25rem;
+  font-size: 0.8125rem;
+  color: #495057;
+}
+
 /* --- Print --- */
 @media print {
   .card, .category-card, details > summary, .details-body,
@@ -688,6 +747,87 @@ def _render_per_repo_details(fingerprints: list[dict]) -> str:
     return "".join(parts)
 
 
+_TESTING_PATTERN_LABELS: dict[str, str] = {
+    "missing_coverage": "Missing coverage config",
+    "missing_integration_tests": "Missing integration tests",
+    "low_test_ratio": "Low test ratio",
+    "no_behavior_naming": "No behavior-named tests",
+    "no_ci": "Missing CI",
+}
+
+_SECURITY_PATTERN_LABELS: dict[str, str] = {
+    "missing_auth": "Missing auth middleware",
+    "wildcard_cors": "CORS issues",
+    "no_dep_audit": "No dep audit in CI",
+    "sensitive_logging": "Sensitive logging risk",
+    "unauthenticated_outbound": "Missing service auth",
+}
+
+
+def _render_pattern_section(title: str, patterns: dict, labels: dict[str, str]) -> str:
+    """Render a testing or security pattern section card."""
+    items_html = []
+    for key, label in labels.items():
+        repos = patterns.get(key, [])
+        if not repos:
+            continue
+        repos_str = ", ".join(_e(r) for r in repos)
+        items_html.append(
+            f'  <div class="gap-item">\n'
+            f'    <span class="gap-label">{_e(label)}</span>\n'
+            f'    <span class="gap-repos">{repos_str}</span>\n'
+            f"  </div>\n"
+        )
+
+    if not items_html:
+        return ""
+
+    summary = _e(patterns.get("summary", ""))
+    summary_html = f'  <p class="pattern-summary">{summary}</p>\n' if summary else ""
+
+    return (
+        '<div class="card">\n'
+        f'  <div class="card-title">{_e(title)}</div>\n'
+        + "".join(items_html)
+        + summary_html
+        + "</div>\n"
+    )
+
+
+def _render_language_security_gaps(comparison: dict) -> str:
+    """Render the language security gaps section."""
+    gaps = comparison.get("language_security_gaps", [])
+    if not gaps:
+        return ""
+
+    items_html = []
+    for entry in gaps:
+        lang = entry.get("language", "unknown")
+        repos = entry.get("repos", [])
+        common_gaps = entry.get("common_gaps", [])
+        if not common_gaps:
+            continue
+        repos_str = ", ".join(_e(r) for r in repos)
+        gap_items = "".join(f"<li>{_e(g)}</li>" for g in common_gaps)
+        items_html.append(
+            f'  <div class="lang-gap">\n'
+            f'    <span class="lang-badge">{_e(lang)}</span>\n'
+            f'    <div class="lang-repos">{repos_str}</div>\n'
+            f"    <ul>{gap_items}</ul>\n"
+            f"  </div>\n"
+        )
+
+    if not items_html:
+        return ""
+
+    return (
+        '<div class="card">\n'
+        '  <div class="card-title">Security Gaps by Language</div>\n'
+        + "".join(items_html)
+        + "</div>\n"
+    )
+
+
 def render_multi(fingerprints: list[dict], comparison: dict) -> str:
     """Return a self-contained HTML report for multiple repos.
 
@@ -703,6 +843,17 @@ def render_multi(fingerprints: list[dict], comparison: dict) -> str:
         + _render_overview_table(fingerprints)
         + _render_consistency_table(comparison)
         + _render_common_failures(comparison)
+        + _render_pattern_section(
+            "Testing Patterns",
+            comparison.get("testing_patterns", {}),
+            _TESTING_PATTERN_LABELS,
+        )
+        + _render_pattern_section(
+            "Security Patterns",
+            comparison.get("security_patterns", {}),
+            _SECURITY_PATTERN_LABELS,
+        )
+        + _render_language_security_gaps(comparison)
         + _render_per_repo_details(fingerprints)
     )
 

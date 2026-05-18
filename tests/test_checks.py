@@ -589,3 +589,57 @@ class TestServiceSecurityChecks:
         checks = ServiceSecurityChecks()
         result = checks._check_secrets_via_env_not_code(tmp_path)
         assert result.passed is True
+
+
+# ===========================================================================
+# Comparator tests
+# ===========================================================================
+
+class TestComparator:
+    def test_testing_patterns_aggregation(self):
+        fingerprints = [
+            {
+                "repo": "repo-a",
+                "checks": [
+                    {"name": "coverage_configured", "passed": False},
+                    {"name": "integration_tests_exist", "passed": True},
+                ],
+            },
+            {
+                "repo": "repo-b",
+                "checks": [
+                    {"name": "coverage_configured", "passed": False},
+                    {"name": "integration_tests_exist", "passed": False},
+                ],
+            },
+        ]
+        from repoaudit.cross_repo.comparator import compare
+        result = compare(fingerprints)
+        assert "repo-a" in result["testing_patterns"]["missing_coverage"]
+        assert "repo-b" in result["testing_patterns"]["missing_coverage"]
+        assert "repo-b" in result["testing_patterns"]["missing_integration_tests"]
+        assert "repo-a" not in result["testing_patterns"]["missing_integration_tests"]
+
+    def test_security_patterns_aggregation(self):
+        fingerprints = [
+            {
+                "repo": "svc-1",
+                "checks": [
+                    {"name": "auth_middleware", "passed": False},
+                    {"name": "cors_configured", "passed": False},
+                ],
+            },
+            {
+                "repo": "svc-2",
+                "checks": [
+                    {"name": "auth_middleware", "passed": True},
+                    {"name": "cors_configured", "passed": False},
+                ],
+            },
+        ]
+        from repoaudit.cross_repo.comparator import compare
+        result = compare(fingerprints)
+        assert "svc-1" in result["security_patterns"]["missing_auth"]
+        assert "svc-2" not in result["security_patterns"]["missing_auth"]
+        assert "svc-1" in result["security_patterns"]["wildcard_cors"]
+        assert "svc-2" in result["security_patterns"]["wildcard_cors"]
