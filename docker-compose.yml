@@ -1,0 +1,6 @@
+services:
+  repoaudit:
+    build: .
+    volumes:
+      - ./repoaudit:/app/repoaudit
+    entrypoint: ["repoaudit"]

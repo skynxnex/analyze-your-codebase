@@ -1,0 +1,51 @@
+# repoaudit — single-repo workflow with AI analysis
+#
+# Copy this file to .github/workflows/repoaudit.yml in your repo.
+# repoaudit will analyze the repository on every PR, run Claude AI analysis,
+# and post the combined report as a PR comment.
+#
+# Required secret: ANTHROPIC_API_KEY
+# Add it at: Settings → Secrets and variables → Actions → New repository secret
+
+name: repoaudit (with AI)
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run repoaudit with AI analysis
+        run: |
+          mkdir -p /tmp/report
+          docker run --rm \
+            -v ${{ github.workspace }}:/repo \
+            -v /tmp/report:/output \
+            -e ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }} \
+            ghcr.io/repoaudit/repoaudit:latest analyze /repo \
+              --output /output/report.md \
+              --ai \
+              --api-key ${{ secrets.ANTHROPIC_API_KEY }}
+
+      - name: Comment report on PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const report = fs.readFileSync('/tmp/report/report.md', 'utf8');
+            const body = `## repoaudit\n\n${report}`;
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: body.slice(0, 65000)  // GitHub comment character limit
+            });

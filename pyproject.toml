@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools==75.8.2"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "repoaudit"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "anthropic[vertex]==0.52.0",
+    "click==8.1.8",
+    "pyyaml==6.0.2",
+]
+
+[project.scripts]
+repoaudit = "repoaudit.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["repoaudit*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 88

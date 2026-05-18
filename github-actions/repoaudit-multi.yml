@@ -1,0 +1,68 @@
+# repoaudit — multi-repo workflow
+#
+# Copy this file to .github/workflows/repoaudit.yml in a top-level
+# mono-repo or platform repo that has access to multiple service repos.
+#
+# Configure REPO_PATHS below to list the directories (relative to the
+# workspace root) that you want to analyze. Each path must point to an
+# independent service/repo directory that was checked out via the steps below.
+#
+# Optional secret: ANTHROPIC_API_KEY (only needed if using --ai flag)
+
+name: repoaudit (multi-repo)
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"  # Every Monday at 06:00 UTC
+  workflow_dispatch:
+
+env:
+  # Space-separated list of repo paths to analyze (relative to GITHUB_WORKSPACE).
+  # Each path must be checked out in a step below.
+  # Example: REPO_PATHS: "service-a service-b service-c"
+  REPO_PATHS: "."
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      # Check out additional service repos here if needed.
+      # Example (using a matrix or separate steps):
+      #
+      # - uses: actions/checkout@v4
+      #   with:
+      #     repository: my-org/service-b
+      #     path: service-b
+      #     token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/checkout@v4
+
+      - name: Run repoaudit (multi)
+        run: |
+          mkdir -p /tmp/report
+
+          # Build the docker run arguments for each repo path.
+          VOLUME_ARGS=""
+          REPO_ARGS=""
+          for REPO in $REPO_PATHS; do
+            ABS_PATH="${GITHUB_WORKSPACE}/${REPO}"
+            CONTAINER_PATH="/repos/${REPO}"
+            VOLUME_ARGS="$VOLUME_ARGS -v ${ABS_PATH}:${CONTAINER_PATH}"
+            REPO_ARGS="$REPO_ARGS ${CONTAINER_PATH}"
+          done
+
+          docker run --rm \
+            $VOLUME_ARGS \
+            -v /tmp/report:/output \
+            ghcr.io/repoaudit/repoaudit:latest multi $REPO_ARGS \
+              --output /output/report.md
+
+      - name: Upload report as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: repoaudit-report
+          path: /tmp/report/report.md
+          retention-days: 30
