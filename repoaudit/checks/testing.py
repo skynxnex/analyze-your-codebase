@@ -58,6 +58,27 @@ class TestingChecks(Check):
                     message=f"Go test files found (e.g. {flat[0].name})",
                 )
 
+        # Fallback: search recursively for test files nested under src/ or similar.
+        # Covers patterns like src/utils/tests/, src/models/__tests__/.
+        if found is None:
+            skip = {"node_modules", ".venv", "venv", "__pycache__", ".git", "build", "target", "dist"}
+            patterns = ["*.test.js", "*.spec.js", "*.test.ts", "*.spec.ts",
+                        "*.test.tsx", "*.spec.tsx", "test_*.py"]
+            for pattern in patterns:
+                matches = [
+                    p for p in repo_path.rglob(pattern)
+                    if not any(s in p.parts for s in skip)
+                ]
+                if matches:
+                    rel = matches[0].relative_to(repo_path)
+                    return CheckResult(
+                        name="tests_exist",
+                        category=_CATEGORY,
+                        passed=True,
+                        severity="required",
+                        message=f"Test files found (e.g. {rel})",
+                    )
+
         return CheckResult(
             name="tests_exist",
             category=_CATEGORY,
@@ -303,14 +324,14 @@ class TestingChecks(Check):
                 name="ci_exists",
                 category=_CATEGORY,
                 passed=True,
-                severity="recommended",
+                severity="optional",
                 message=f"CI config found: {names}",
             )
         return CheckResult(
             name="ci_exists",
             category=_CATEGORY,
             passed=False,
-            severity="recommended",
+            severity="optional",
             message="No CI configuration found (.github/workflows/ or .gitlab-ci.yml)",
             detail="Add a GitHub Actions workflow or GitLab CI config that runs on every PR.",
         )

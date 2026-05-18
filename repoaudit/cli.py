@@ -60,12 +60,12 @@ def main() -> None:
 @click.option(
     "--format",
     "output_format",
-    type=click.Choice(["markdown", "prompt"], case_sensitive=False),
+    type=click.Choice(["markdown", "html", "prompt"], case_sensitive=False),
     default="markdown",
     show_default=True,
     help=(
-        "Output format: 'markdown' (default) or 'prompt' "
-        "(appends a paste-ready LLM prompt after the report)."
+        "Output format: 'markdown' (default), 'html' (self-contained HTML file), "
+        "or 'prompt' (appends a paste-ready LLM prompt after the report)."
     ),
 )
 def analyze(
@@ -76,7 +76,7 @@ def analyze(
     api_key: str | None,
     output_format: str,
 ) -> None:
-    """Analyze REPO_PATH and produce a Markdown report."""
+    """Analyze REPO_PATH and produce a report."""
     repo_path = repo_path.resolve()
 
     import os
@@ -103,25 +103,33 @@ def analyze(
 
     results = _run_checks(repo_path, language, verbose)
     fingerprint = fp_module.build(repo_path, language, results)
-    report = md_module.render(fingerprint)
 
-    if ai:
-        click.echo("  Running AI qualitative analysis...", err=True)
-        from repoaudit.ai.sampler import sample  # noqa: PLC0415 — lazy import
-        from repoaudit.ai.claude import ClaudeAnalyzer  # noqa: PLC0415 — lazy import
+    if output_format == "html":
+        from repoaudit.reporters import html as html_module  # noqa: PLC0415
 
-        samples = sample(repo_path)
-        analyzer = ClaudeAnalyzer(api_key=api_key)
-        ai_findings = analyzer.analyze(fingerprint, samples)
-        report = md_module.add_ai_section(report, ai_findings)
-        if ai_findings.get("_error"):
-            click.echo(f"  Warning: AI analysis incomplete — {ai_findings['_error']}", err=True)
+        report = html_module.render(fingerprint)
+    else:
+        report = md_module.render(fingerprint)
 
-    if output_format == "prompt":
-        from repoaudit.reporters import prompt as prompt_module  # noqa: PLC0415
+        if ai:
+            click.echo("  Running AI qualitative analysis...", err=True)
+            from repoaudit.ai.sampler import sample  # noqa: PLC0415 — lazy import
+            from repoaudit.ai.claude import ClaudeAnalyzer  # noqa: PLC0415 — lazy import
 
-        prompt_section = prompt_module.render(fingerprint)
-        report = report + "\n\n---\n\n" + prompt_section
+            samples = sample(repo_path)
+            analyzer = ClaudeAnalyzer(api_key=api_key)
+            ai_findings = analyzer.analyze(fingerprint, samples)
+            report = md_module.add_ai_section(report, ai_findings)
+            if ai_findings.get("_error"):
+                click.echo(
+                    f"  Warning: AI analysis incomplete — {ai_findings['_error']}", err=True
+                )
+
+        if output_format == "prompt":
+            from repoaudit.reporters import prompt as prompt_module  # noqa: PLC0415
+
+            prompt_section = prompt_module.render(fingerprint)
+            report = report + "\n\n---\n\n" + prompt_section
 
     if output:
         output.write_text(report, encoding="utf-8")
@@ -170,6 +178,14 @@ def analyze(
     envvar="ANTHROPIC_API_KEY",
     help="Anthropic API key. Defaults to ANTHROPIC_API_KEY env var.",
 )
+@click.option(
+    "--format",
+    "output_format",
+    type=click.Choice(["markdown", "html"], case_sensitive=False),
+    default="markdown",
+    show_default=True,
+    help="Output format: 'markdown' (default) or 'html' (self-contained HTML file).",
+)
 def multi(
     repo_paths: tuple[Path, ...],
     glob_pattern: str | None,
@@ -177,6 +193,7 @@ def multi(
     verbose: bool,
     ai: bool,
     api_key: str | None,
+    output_format: str,
 ) -> None:
     """Analyze multiple repos and find cross-repo patterns."""
     import glob as glob_module
@@ -235,20 +252,26 @@ def multi(
     from repoaudit.reporters import multi_markdown as mm_module  # noqa: PLC0415 — lazy import
 
     comparison = comparator.compare(fingerprints)
-    report = mm_module.render(fingerprints, comparison)
 
-    if ai:
-        click.echo("  Running AI cross-repo analysis...", err=True)
-        from repoaudit.cross_repo.ai_cross import CrossRepoAnalyzer  # noqa: PLC0415 — lazy import
+    if output_format == "html":
+        from repoaudit.reporters import html as html_module  # noqa: PLC0415
 
-        analyzer = CrossRepoAnalyzer(api_key=api_key)
-        ai_findings = analyzer.analyze(comparison, fingerprints)
-        report = mm_module.add_ai_section(report, ai_findings)
-        if ai_findings.get("_error"):
-            click.echo(
-                f"  Warning: AI analysis incomplete — {ai_findings['_error']}",
-                err=True,
-            )
+        report = html_module.render_multi(fingerprints, comparison)
+    else:
+        report = mm_module.render(fingerprints, comparison)
+
+        if ai:
+            click.echo("  Running AI cross-repo analysis...", err=True)
+            from repoaudit.cross_repo.ai_cross import CrossRepoAnalyzer  # noqa: PLC0415
+
+            analyzer = CrossRepoAnalyzer(api_key=api_key)
+            ai_findings = analyzer.analyze(comparison, fingerprints)
+            report = mm_module.add_ai_section(report, ai_findings)
+            if ai_findings.get("_error"):
+                click.echo(
+                    f"  Warning: AI analysis incomplete — {ai_findings['_error']}",
+                    err=True,
+                )
 
     if output:
         output.write_text(report, encoding="utf-8")

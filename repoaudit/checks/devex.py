@@ -14,6 +14,11 @@ from repoaudit.checks.base import Check, CheckResult
 
 _CATEGORY = "devex"
 
+_DB_IMAGES = re.compile(
+    r"image:\s*(?:postgres|mysql|mariadb|mongodb|mongo|redis|elasticsearch|mssql|sqlite)",
+    re.IGNORECASE,
+)
+
 _SETUP_KEYWORDS = re.compile(
     r"(?:getting started|local setup|local development|running locally|how to run|setup)",
     re.IGNORECASE,
@@ -75,6 +80,17 @@ class DevExChecks(Check):
             ),
         )
 
+    def _has_database(self, repo_path: Path) -> bool:
+        """Return True if any docker-compose file references a database image."""
+        for name in ("docker-compose.yml", "docker-compose.yaml",
+                     "docker-compose.dev.yml", "docker-compose.dev.yaml"):
+            dc = repo_path / name
+            if dc.exists():
+                text = dc.read_text(encoding="utf-8", errors="ignore")
+                if _DB_IMAGES.search(text):
+                    return True
+        return False
+
     def _check_seed_script(self, repo_path: Path) -> CheckResult:
         # Check for standalone seed scripts.
         seed_globs = [
@@ -123,12 +139,22 @@ class DevExChecks(Check):
             except json.JSONDecodeError:
                 pass
 
+        # Only flag missing seed script if the repo has a database.
+        if not self._has_database(repo_path):
+            return CheckResult(
+                name="seed_script_exists",
+                category=_CATEGORY,
+                passed=True,
+                severity="optional",
+                message="No database detected — seed script not required",
+            )
+
         return CheckResult(
             name="seed_script_exists",
             category=_CATEGORY,
             passed=False,
             severity="recommended",
-            message="No seed script found",
+            message="No seed script found (database detected)",
             detail=(
                 "Add a seed script (e.g. seed.py, db_seed.sh) to populate local dev data. "
                 "This dramatically reduces onboarding time."

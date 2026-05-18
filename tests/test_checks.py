@@ -246,7 +246,14 @@ class TestDevEx:
         results = self.check.run(tmp_path, _LANG_TS)
         assert _result(results, "seed_script_exists").passed
 
-    def test_seed_script_fails_when_absent(self, tmp_path: Path) -> None:
+    def test_seed_script_passes_when_absent_but_no_database(self, tmp_path: Path) -> None:
+        # No database in docker-compose → seed script not required.
+        results = self.check.run(tmp_path, _LANG_PYTHON)
+        assert _result(results, "seed_script_exists").passed
+
+    def test_seed_script_fails_when_absent_but_database_present(self, tmp_path: Path) -> None:
+        _write(tmp_path, "docker-compose.yml",
+               "services:\n  db:\n    image: postgres:15\n")
         results = self.check.run(tmp_path, _LANG_PYTHON)
         assert not _result(results, "seed_script_exists").passed
 
