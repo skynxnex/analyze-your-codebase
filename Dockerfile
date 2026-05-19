@@ -1,15 +1,15 @@
-FROM python:3.11-slim AS base
+# Pull Trivy binary from its official image (handles multi-arch automatically)
+FROM aquasec/trivy:0.57.1 AS trivy-bin
 
-# Install system deps: git (VCS detection) + curl (Trivy download)
+FROM python:3.11-slim
+
+# Install system deps: git (VCS detection)
 RUN apt-get update && apt-get install -y --no-install-recommends \
         git \
-        curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Trivy (pinned binary)
-RUN curl -sfL https://github.com/aquasecurity/trivy/releases/download/v0.58.1/trivy_0.58.1_Linux-64bit.tar.gz \
-    | tar -xz -C /usr/local/bin trivy \
-    && trivy --version
+# Copy Trivy binary from official image
+COPY --from=trivy-bin /usr/local/bin/trivy /usr/local/bin/trivy
 
 WORKDIR /app
 COPY pyproject.toml .
