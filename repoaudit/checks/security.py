@@ -10,6 +10,8 @@ import re
 from pathlib import Path
 
 from repoaudit.checks.base import Check, CheckResult
+from repoaudit.tools.trivy import run_trivy
+from repoaudit.tools.detect_secrets_tool import run_detect_secrets
 
 _CATEGORY = "security"
 
@@ -65,6 +67,8 @@ class SecurityChecks(Check):
             self._check_cors(repo_path, lang),
             self._check_dep_audit_in_ci(repo_path),
             self._check_https_enforcement(repo_path),
+            self._check_trivy(repo_path),
+            self._check_detect_secrets(repo_path),
         ]
 
     def _check_no_hardcoded_secrets(self, repo_path: Path) -> CheckResult:
@@ -637,6 +641,75 @@ class SecurityChecks(Check):
                 "HTTPS posture unclear — likely terminated at load balancer "
                 "(acceptable for internal services)"
             ),
+        )
+
+    def _check_trivy(self, repo_path: Path) -> CheckResult:
+        result = run_trivy(repo_path)
+        if not result.ran:
+            return CheckResult(
+                name="trivy_scan",
+                category=_CATEGORY,
+                passed=True,
+                severity="recommended",
+                message="Trivy not available — skipping vulnerability scan",
+            )
+        total = result.critical + result.high + result.medium + result.low + result.unknown
+        if result.critical > 0 or result.high > 0:
+            details = []
+            for v in result.vuln_details[:5]:
+                details.append(f"{v['id']} ({v['pkg']}): {v['title']}")
+            detail_str = "\n".join(details) if details else ""
+            return CheckResult(
+                name="trivy_scan",
+                category=_CATEGORY,
+                passed=False,
+                severity="required",
+                message=f"Trivy: {result.critical} critical, {result.high} high, {result.medium} medium vulnerabilities",
+                detail=detail_str,
+            )
+        if result.medium > 0 or result.low > 0:
+            return CheckResult(
+                name="trivy_scan",
+                category=_CATEGORY,
+                passed=True,
+                severity="recommended",
+                message=f"Trivy: {total} vulnerabilities (none critical/high) — {result.medium} medium, {result.low} low",
+            )
+        return CheckResult(
+            name="trivy_scan",
+            category=_CATEGORY,
+            passed=True,
+            severity="recommended",
+            message=f"Trivy: no known vulnerabilities found ({total} total scanned)",
+        )
+
+    def _check_detect_secrets(self, repo_path: Path) -> CheckResult:
+        result = run_detect_secrets(repo_path)
+        if not result.ran:
+            return CheckResult(
+                name="detect_secrets_scan",
+                category=_CATEGORY,
+                passed=True,
+                severity="recommended",
+                message="detect-secrets not available — skipping",
+            )
+        if result.count == 0:
+            return CheckResult(
+                name="detect_secrets_scan",
+                category=_CATEGORY,
+                passed=True,
+                severity="required",
+                message="detect-secrets: no secrets detected",
+            )
+        type_summary = ", ".join(f"{k}: {v}" for k, v in list(result.by_type.items())[:5])
+        files_summary = ", ".join(result.sample_files[:3])
+        return CheckResult(
+            name="detect_secrets_scan",
+            category=_CATEGORY,
+            passed=False,
+            severity="required",
+            message=f"detect-secrets: {result.count} potential secret(s) found",
+            detail=f"Types: {type_summary}\nFiles: {files_summary}",
         )
 
     def _source_files(self, repo_path: Path):

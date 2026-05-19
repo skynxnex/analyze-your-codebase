@@ -266,6 +266,70 @@ def test_https_redirect_found_in_dotnet(tmp_path: Path) -> None:
 
 
 # ===========================================================================
+# Trivy and detect-secrets checks
+# ===========================================================================
+
+from unittest.mock import patch, MagicMock
+
+
+def test_trivy_check_passes_when_trivy_not_installed(tmp_path: Path) -> None:
+    with patch("repoaudit.tools.trivy.subprocess.run", side_effect=FileNotFoundError):
+        checks = SecurityChecks()
+        result = checks._check_trivy(tmp_path)
+    assert result.passed is True
+    assert "not available" in result.message
+
+
+def test_trivy_check_fails_on_critical_vulns(tmp_path: Path) -> None:
+    trivy_output = json.dumps({
+        "Results": [{
+            "Vulnerabilities": [{
+                "VulnerabilityID": "CVE-2024-1234",
+                "PkgName": "requests",
+                "Severity": "CRITICAL",
+                "Title": "Critical vuln in requests",
+            }]
+        }]
+    })
+    mock_proc = MagicMock()
+    mock_proc.returncode = 1
+    mock_proc.stdout = trivy_output
+    mock_proc.stderr = ""
+    with patch("repoaudit.tools.trivy.subprocess.run", return_value=mock_proc):
+        checks = SecurityChecks()
+        result = checks._check_trivy(tmp_path)
+    assert result.passed is False
+    assert "critical" in result.message.lower()
+
+
+def test_detect_secrets_passes_when_not_installed(tmp_path: Path) -> None:
+    with patch("repoaudit.tools.detect_secrets_tool.subprocess.run", side_effect=FileNotFoundError):
+        checks = SecurityChecks()
+        result = checks._check_detect_secrets(tmp_path)
+    assert result.passed is True
+
+
+def test_detect_secrets_fails_when_secrets_found(tmp_path: Path) -> None:
+    ds_output = json.dumps({
+        "results": {
+            "config.py": [{
+                "type": "Secret Keyword",
+                "line_number": 42,
+            }]
+        }
+    })
+    mock_proc = MagicMock()
+    mock_proc.returncode = 0
+    mock_proc.stdout = ds_output
+    mock_proc.stderr = ""
+    with patch("repoaudit.tools.detect_secrets_tool.subprocess.run", return_value=mock_proc):
+        checks = SecurityChecks()
+        result = checks._check_detect_secrets(tmp_path)
+    assert result.passed is False
+    assert "1" in result.message
+
+
+# ===========================================================================
 # DevEx checks
 # ===========================================================================
 
