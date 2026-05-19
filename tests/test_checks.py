@@ -309,6 +309,27 @@ def test_detect_secrets_passes_when_not_installed(tmp_path: Path) -> None:
     assert result.passed is True
 
 
+def test_no_hardcoded_secrets_uses_detect_secrets_when_available(tmp_path: Path) -> None:
+    ds_output = json.dumps({"results": {}})
+    mock_proc = MagicMock()
+    mock_proc.returncode = 0
+    mock_proc.stdout = ds_output
+    mock_proc.stderr = ""
+    with patch("repoaudit.tools.detect_secrets_tool.subprocess.run", return_value=mock_proc):
+        checks = SecurityChecks()
+        result = checks._check_no_hardcoded_secrets(tmp_path)
+    assert result.passed is True
+    assert "detect-secrets" in result.message
+
+
+def test_no_hardcoded_secrets_falls_back_to_regex_when_tool_absent(tmp_path: Path) -> None:
+    with patch("repoaudit.tools.detect_secrets_tool.subprocess.run", side_effect=FileNotFoundError):
+        checks = SecurityChecks()
+        result = checks._check_no_hardcoded_secrets(tmp_path)
+    # Fallback runs on empty repo — no secrets, should pass.
+    assert result.passed is True
+
+
 def test_detect_secrets_fails_when_secrets_found(tmp_path: Path) -> None:
     ds_output = json.dumps({
         "results": {

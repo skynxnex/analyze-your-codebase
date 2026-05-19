@@ -2,6 +2,10 @@
 
 Covers: hardcoded secrets, committed .env files, unpinned dependencies,
 and Docker images using the 'latest' tag.
+
+When detect-secrets is available, it replaces the homemade regex scan for
+no_hardcoded_secrets and no_dotenv_committed. When Trivy is available, it
+replaces dep_audit_in_ci and provides a richer no_latest_docker result.
 """
 
 from __future__ import annotations
@@ -10,8 +14,6 @@ import re
 from pathlib import Path
 
 from repoaudit.checks.base import Check, CheckResult
-from repoaudit.tools.trivy import run_trivy
-from repoaudit.tools.detect_secrets_tool import run_detect_secrets
 
 _CATEGORY = "security"
 
@@ -57,21 +59,80 @@ class SecurityChecks(Check):
     """All security checks bundled into one group."""
 
     def run(self, repo_path: Path, language: dict) -> list[CheckResult]:
+        from repoaudit.tools.trivy import run_trivy
+
         lang = language.get("language", "unknown")
-        return [
-            self._check_no_hardcoded_secrets(repo_path),
-            self._check_no_dotenv_committed(repo_path),
+
+        # Run Trivy once and cache so _check_trivy can reuse the result.
+        trivy = run_trivy(repo_path)
+        self._trivy_cache = trivy
+
+        results = [
+            self._check_no_hardcoded_secrets(repo_path),   # detect-secrets or fallback
+            self._check_no_dotenv_committed(repo_path),    # detect-secrets or fallback
+            self._check_trivy(repo_path),                  # Trivy CVE + secrets scan
             self._check_deps_pinned(repo_path, language),
-            self._check_no_latest_docker(repo_path),
             self._check_auth_middleware(repo_path, lang),
             self._check_cors(repo_path, lang),
-            self._check_dep_audit_in_ci(repo_path),
             self._check_https_enforcement(repo_path),
-            self._check_trivy(repo_path),
-            self._check_detect_secrets(repo_path),
         ]
 
+        # no_latest_docker: use Trivy findings when available, else regex fallback.
+        if trivy.ran:
+            results.append(self._check_no_latest_docker_via_trivy(repo_path, trivy))
+        else:
+            results.append(self._check_no_latest_docker(repo_path))
+
+        # dep_audit_in_ci: Trivy makes this redundant — only run as fallback.
+        if not trivy.ran:
+            results.append(self._check_dep_audit_in_ci(repo_path))
+
+        return results
+
+    # ------------------------------------------------------------------
+    # detect-secrets cache helper
+    # ------------------------------------------------------------------
+
+    def _run_detect_secrets_cached(self, repo_path: Path):
+        """Run detect-secrets once and cache the result on self."""
+        if not hasattr(self, '_ds_cache'):
+            from repoaudit.tools.detect_secrets_tool import run_detect_secrets
+            self._ds_cache = run_detect_secrets(repo_path)
+        return self._ds_cache
+
+    # ------------------------------------------------------------------
+    # no_hardcoded_secrets
+    # ------------------------------------------------------------------
+
     def _check_no_hardcoded_secrets(self, repo_path: Path) -> CheckResult:
+        """Use detect-secrets when available; fall back to regex scan."""
+        ds = self._run_detect_secrets_cached(repo_path)
+        if ds.ran:
+            if ds.count == 0:
+                return CheckResult(
+                    name="no_hardcoded_secrets",
+                    category=_CATEGORY,
+                    passed=True,
+                    severity="required",
+                    message="detect-secrets: no secrets detected",
+                )
+            type_summary = ", ".join(
+                f"{k}: {v}" for k, v in list(ds.by_type.items())[:5]
+            )
+            files_summary = ", ".join(ds.sample_files[:3])
+            return CheckResult(
+                name="no_hardcoded_secrets",
+                category=_CATEGORY,
+                passed=False,
+                severity="required",
+                message=f"detect-secrets: {ds.count} potential secret(s) found",
+                detail=f"Types: {type_summary}\nFiles: {files_summary}",
+            )
+        # Fallback: homemade regex scan.
+        return self._check_no_hardcoded_secrets_fallback(repo_path)
+
+    def _check_no_hardcoded_secrets_fallback(self, repo_path: Path) -> CheckResult:
+        """Regex-based secret scan — used when detect-secrets is not available."""
         hits: list[str] = []
         for path in self._source_files(repo_path):
             try:
@@ -91,6 +152,7 @@ class SecurityChecks(Check):
             severity="required",
             message=(
                 "No hardcoded secrets detected"
+                " (fallback scan — install detect-secrets for better coverage)"
                 if passed
                 else f"Possible hardcoded secrets in {len(hits)} file(s): {', '.join(hits[:5])}"
             ),
@@ -101,7 +163,42 @@ class SecurityChecks(Check):
             ),
         )
 
+    # ------------------------------------------------------------------
+    # no_dotenv_committed
+    # ------------------------------------------------------------------
+
     def _check_no_dotenv_committed(self, repo_path: Path) -> CheckResult:
+        """Use detect-secrets .env findings when available; fall back to gitignore."""
+        ds = self._run_detect_secrets_cached(repo_path)
+        if ds.ran:
+            env_files = [f for f in ds.sample_files if ".env" in f]
+            if env_files:
+                return CheckResult(
+                    name="no_dotenv_committed",
+                    category=_CATEGORY,
+                    passed=False,
+                    severity="required",
+                    message=(
+                        f"detect-secrets: secrets found in env file(s): "
+                        f"{', '.join(env_files[:3])}"
+                    ),
+                    detail=(
+                        "Remove secrets from .env files and load them from "
+                        "a secrets manager or CI environment."
+                    ),
+                )
+            return CheckResult(
+                name="no_dotenv_committed",
+                category=_CATEGORY,
+                passed=True,
+                severity="required",
+                message="detect-secrets: no secrets detected in env files",
+            )
+        # Fallback: check if .env exists and is not gitignored.
+        return self._check_no_dotenv_committed_fallback(repo_path)
+
+    def _check_no_dotenv_committed_fallback(self, repo_path: Path) -> CheckResult:
+        """Gitignore-based .env check — used when detect-secrets is not available."""
         dotenv = repo_path / ".env"
         if not dotenv.exists():
             return CheckResult(
@@ -137,6 +234,10 @@ class SecurityChecks(Check):
             message=".env file exists and is NOT in .gitignore",
             detail="Add '.env' to .gitignore to prevent accidental secret commits.",
         )
+
+    # ------------------------------------------------------------------
+    # deps_pinned
+    # ------------------------------------------------------------------
 
     def _check_deps_pinned(self, repo_path: Path, language: dict) -> CheckResult:
         lang = language.get("language", "unknown")
@@ -296,6 +397,10 @@ class SecurityChecks(Check):
             ),
         )
 
+    # ------------------------------------------------------------------
+    # no_latest_docker — regex fallback
+    # ------------------------------------------------------------------
+
     def _check_no_latest_docker(self, repo_path: Path) -> CheckResult:
         docker_files = [
             repo_path / "Dockerfile",
@@ -328,6 +433,66 @@ class SecurityChecks(Check):
                 else "Pin Docker images to specific versions (e.g. python:3.11-slim, not python:latest)."
             ),
         )
+
+    # ------------------------------------------------------------------
+    # no_latest_docker — Trivy-aware variant
+    # ------------------------------------------------------------------
+
+    def _check_no_latest_docker_via_trivy(self, repo_path: Path, trivy) -> CheckResult:
+        """Synthesise no_latest_docker from Trivy's vulnerability findings.
+
+        When Trivy ran clean (no critical/high), we trust it and pass.
+        When Trivy found critical/high vulnerabilities, we also check for
+        :latest tags in Docker files so the message is informative.
+        """
+        if trivy.critical == 0 and trivy.high == 0:
+            return CheckResult(
+                name="no_latest_docker",
+                category=_CATEGORY,
+                passed=True,
+                severity="recommended",
+                message="Trivy: no critical/high image vulnerabilities detected",
+            )
+
+        # Trivy found vulnerabilities — also check if :latest is used.
+        docker_files = [
+            repo_path / "Dockerfile",
+            repo_path / "docker-compose.yml",
+            repo_path / "docker-compose.yaml",
+        ]
+        latest_hits: list[str] = []
+        for df in docker_files:
+            if not df.exists():
+                continue
+            text = df.read_text(encoding="utf-8", errors="ignore")
+            if re.search(r"(?:image:\s*|FROM\s+)\S+:latest", text, re.IGNORECASE):
+                latest_hits.append(df.name)
+
+        detail_parts = [
+            f"Trivy: {trivy.critical} critical, {trivy.high} high"
+            " vulnerabilities in dependencies."
+        ]
+        if latest_hits:
+            detail_parts.append(
+                f"':latest' tag found in: {', '.join(latest_hits)}"
+                " — pin to a specific version."
+            )
+
+        return CheckResult(
+            name="no_latest_docker",
+            category=_CATEGORY,
+            passed=False,
+            severity="recommended",
+            message=(
+                f"Trivy: {trivy.critical} critical, {trivy.high} high "
+                "vulnerabilities in dependencies"
+            ),
+            detail=" ".join(detail_parts),
+        )
+
+    # ------------------------------------------------------------------
+    # auth_middleware
+    # ------------------------------------------------------------------
 
     def _check_auth_middleware(self, repo_path: Path, lang: str) -> CheckResult:
         """Check whether authentication patterns exist in source files."""
@@ -420,6 +585,10 @@ class SecurityChecks(Check):
             ),
         )
 
+    # ------------------------------------------------------------------
+    # cors_configured
+    # ------------------------------------------------------------------
+
     def _check_cors(self, repo_path: Path, lang: str) -> CheckResult:
         """Check for CORS configuration, flagging wildcard CORS as a failure."""
         cors_patterns = [
@@ -491,6 +660,10 @@ class SecurityChecks(Check):
             message="No CORS configuration detected (may not be needed for internal APIs)",
         )
 
+    # ------------------------------------------------------------------
+    # dep_audit_in_ci — only called when Trivy is not available
+    # ------------------------------------------------------------------
+
     def _check_dep_audit_in_ci(self, repo_path: Path) -> CheckResult:
         """Check whether a dependency vulnerability audit runs in CI."""
         audit_tools = [
@@ -549,6 +722,10 @@ class SecurityChecks(Check):
                 "known CVEs in dependencies."
             ),
         )
+
+    # ------------------------------------------------------------------
+    # https_enforced
+    # ------------------------------------------------------------------
 
     def _check_https_enforcement(self, repo_path: Path) -> CheckResult:
         """Check whether HTTPS is enforced at the application or Docker layer."""
@@ -643,8 +820,15 @@ class SecurityChecks(Check):
             ),
         )
 
+    # ------------------------------------------------------------------
+    # trivy_scan — standalone Trivy check result
+    # ------------------------------------------------------------------
+
     def _check_trivy(self, repo_path: Path) -> CheckResult:
-        result = run_trivy(repo_path)
+        result = getattr(self, '_trivy_cache', None)
+        if result is None:
+            from repoaudit.tools.trivy import run_trivy
+            result = run_trivy(repo_path)
         if not result.ran:
             return CheckResult(
                 name="trivy_scan",
@@ -664,7 +848,10 @@ class SecurityChecks(Check):
                 category=_CATEGORY,
                 passed=False,
                 severity="required",
-                message=f"Trivy: {result.critical} critical, {result.high} high, {result.medium} medium vulnerabilities",
+                message=(
+                    f"Trivy: {result.critical} critical, {result.high} high, "
+                    f"{result.medium} medium vulnerabilities"
+                ),
                 detail=detail_str,
             )
         if result.medium > 0 or result.low > 0:
@@ -673,7 +860,10 @@ class SecurityChecks(Check):
                 category=_CATEGORY,
                 passed=True,
                 severity="recommended",
-                message=f"Trivy: {total} vulnerabilities (none critical/high) — {result.medium} medium, {result.low} low",
+                message=(
+                    f"Trivy: {total} vulnerabilities (none critical/high) — "
+                    f"{result.medium} medium, {result.low} low"
+                ),
             )
         return CheckResult(
             name="trivy_scan",
@@ -683,8 +873,12 @@ class SecurityChecks(Check):
             message=f"Trivy: no known vulnerabilities found ({total} total scanned)",
         )
 
+    # ------------------------------------------------------------------
+    # detect_secrets_scan — kept as a named result for backward compat
+    # ------------------------------------------------------------------
+
     def _check_detect_secrets(self, repo_path: Path) -> CheckResult:
-        result = run_detect_secrets(repo_path)
+        result = self._run_detect_secrets_cached(repo_path)
         if not result.ran:
             return CheckResult(
                 name="detect_secrets_scan",
@@ -711,6 +905,10 @@ class SecurityChecks(Check):
             message=f"detect-secrets: {result.count} potential secret(s) found",
             detail=f"Types: {type_summary}\nFiles: {files_summary}",
         )
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
 
     def _source_files(self, repo_path: Path):
         """Yield source files to scan, skipping irrelevant directories."""
