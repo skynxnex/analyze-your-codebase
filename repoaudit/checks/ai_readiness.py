@@ -24,12 +24,14 @@ class AIReadinessChecks(Check):
     """All AI-readiness checks bundled into one group."""
 
     def run(self, repo_path: Path, language: dict) -> list[CheckResult]:
+        lang = language.get("language", "unknown")
         return [
             self._check_claude_md(repo_path),
             self._check_readme_substantial(repo_path),
             self._check_naming_consistent(repo_path),
             self._check_env_vars_documented(repo_path),
             self._check_dependencies_explicit(repo_path),
+            self._check_docstring_coverage(repo_path, lang),
         ]
 
     def _check_claude_md(self, repo_path: Path) -> CheckResult:
@@ -184,5 +186,54 @@ class AIReadinessChecks(Check):
             detail=(
                 "Consider adding a DEPENDENCIES.md or a 'Dependencies' section in README.md "
                 "listing external services (databases, queues, APIs)."
+            ),
+        )
+
+    def _check_docstring_coverage(self, repo_path: Path, lang: str) -> CheckResult:
+        from repoaudit.tools.interrogate_tool import run_interrogate
+
+        # Only applies to Python repos
+        if "python" not in lang:
+            return CheckResult(
+                name="docstring_coverage",
+                category=_CATEGORY,
+                passed=True,
+                severity="optional",
+                message="Docstring coverage check is Python-only — skipped",
+            )
+
+        r = run_interrogate(repo_path)
+        if not r.ran:
+            return CheckResult(
+                name="docstring_coverage",
+                category=_CATEGORY,
+                passed=True,
+                severity="recommended",
+                message="interrogate not available — skipping docstring coverage",
+            )
+        if r.total == 0:
+            return CheckResult(
+                name="docstring_coverage",
+                category=_CATEGORY,
+                passed=True,
+                severity="optional",
+                message="No Python functions/classes found to analyse",
+            )
+
+        passed = r.coverage >= 60.0
+        return CheckResult(
+            name="docstring_coverage",
+            category=_CATEGORY,
+            passed=passed,
+            severity="recommended",
+            message=f"interrogate: {r.coverage:.1f}% docstring coverage ({r.total - r.missing}/{r.total} documented)",
+            detail=(
+                ""
+                if passed
+                else (
+                    f"{r.missing} function(s)/class(es) lack docstrings. "
+                    "Good docstrings dramatically improve AI-assisted development — "
+                    "Claude uses them to understand intent without reading implementation."
+                )
             ),
         )

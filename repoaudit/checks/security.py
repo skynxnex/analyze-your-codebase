@@ -87,6 +87,9 @@ class SecurityChecks(Check):
         if not trivy.ran:
             results.append(self._check_dep_audit_in_ci(repo_path))
 
+        results.append(self._check_bandit(repo_path, lang))
+        results.append(self._check_pip_audit(repo_path, lang))
+
         return results
 
     # ------------------------------------------------------------------
@@ -904,6 +907,105 @@ class SecurityChecks(Check):
             severity="required",
             message=f"detect-secrets: {result.count} potential secret(s) found",
             detail=f"Types: {type_summary}\nFiles: {files_summary}",
+        )
+
+    # ------------------------------------------------------------------
+    # bandit_scan
+    # ------------------------------------------------------------------
+
+    def _check_bandit(self, repo_path: Path, lang: str) -> CheckResult:
+        from repoaudit.tools.bandit_tool import run_bandit
+        if "python" not in lang:
+            return CheckResult(
+                name="bandit_scan",
+                category=_CATEGORY,
+                passed=True,
+                severity="optional",
+                message="bandit is Python-only — skipped",
+            )
+        r = run_bandit(repo_path)
+        if not r.ran:
+            return CheckResult(
+                name="bandit_scan",
+                category=_CATEGORY,
+                passed=True,
+                severity="recommended",
+                message="bandit not available — skipping Python security scan",
+            )
+        if r.high_severity > 0:
+            top = "; ".join(
+                f"[{i['test_id']}] {i['text']} ({i['file']}:{i['line']})"
+                for i in r.issues[:3] if i["severity"] == "HIGH"
+            )
+            return CheckResult(
+                name="bandit_scan",
+                category=_CATEGORY,
+                passed=False,
+                severity="required",
+                message=f"bandit: {r.high_severity} HIGH, {r.medium_severity} MEDIUM security issue(s)",
+                detail=top,
+            )
+        if r.medium_severity > 0:
+            return CheckResult(
+                name="bandit_scan",
+                category=_CATEGORY,
+                passed=False,
+                severity="recommended",
+                message=f"bandit: {r.medium_severity} MEDIUM security issue(s) (no HIGH)",
+                detail="; ".join(
+                    f"[{i['test_id']}] {i['text']}" for i in r.issues[:3]
+                ),
+            )
+        return CheckResult(
+            name="bandit_scan",
+            category=_CATEGORY,
+            passed=True,
+            severity="recommended",
+            message=f"bandit: no HIGH/MEDIUM issues (only {r.low_severity} low)",
+        )
+
+    # ------------------------------------------------------------------
+    # pip_audit_scan
+    # ------------------------------------------------------------------
+
+    def _check_pip_audit(self, repo_path: Path, lang: str) -> CheckResult:
+        from repoaudit.tools.pip_audit_tool import run_pip_audit
+        if "python" not in lang:
+            return CheckResult(
+                name="pip_audit_scan",
+                category=_CATEGORY,
+                passed=True,
+                severity="optional",
+                message="pip-audit is Python-only — skipped",
+            )
+        r = run_pip_audit(repo_path)
+        if not r.ran:
+            return CheckResult(
+                name="pip_audit_scan",
+                category=_CATEGORY,
+                passed=True,
+                severity="recommended",
+                message=f"pip-audit: {r.error}",
+            )
+        if r.total_vulnerabilities == 0:
+            return CheckResult(
+                name="pip_audit_scan",
+                category=_CATEGORY,
+                passed=True,
+                severity="recommended",
+                message="pip-audit: no known vulnerabilities in dependencies",
+            )
+        pkg_list = ", ".join(
+            f"{f['package']}=={f['version']} ({f['vuln_id']})"
+            for f in r.findings[:5]
+        )
+        return CheckResult(
+            name="pip_audit_scan",
+            category=_CATEGORY,
+            passed=False,
+            severity="required",
+            message=f"pip-audit: {r.total_vulnerabilities} vulnerability/ies in {r.vulnerable_packages} package(s)",
+            detail=pkg_list,
         )
 
     # ------------------------------------------------------------------

@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from repoaudit.checks.ai_readiness import AIReadinessChecks
+from repoaudit.checks.code_quality import CodeQualityChecks
 from repoaudit.checks.devex import DevExChecks
 from repoaudit.checks.security import SecurityChecks
 from repoaudit.checks.service_security import ServiceSecurityChecks
@@ -116,6 +117,44 @@ class TestAIReadiness:
         r = _result(results, "dependencies_explicit")
         assert not r.passed
         assert r.severity == "optional"
+
+    def test_docstring_coverage_skipped_for_non_python(self, tmp_path: Path) -> None:
+        from unittest.mock import patch
+        checks = AIReadinessChecks()
+        result = checks._check_docstring_coverage(tmp_path, "kotlin_spring")
+        assert result.passed is True
+        assert "Python-only" in result.message
+
+    def test_docstring_coverage_passes_when_tool_absent(self, tmp_path: Path) -> None:
+        from unittest.mock import patch
+        with patch("repoaudit.tools.interrogate_tool.subprocess.run", side_effect=FileNotFoundError):
+            checks = AIReadinessChecks()
+            result = checks._check_docstring_coverage(tmp_path, "python")
+        assert result.passed is True
+
+    def test_docstring_coverage_passes_above_threshold(self, tmp_path: Path) -> None:
+        from unittest.mock import patch, MagicMock
+        mock_proc = MagicMock()
+        mock_proc.returncode = 0
+        mock_proc.stdout = "RESULT: PASSED (minimum: 80.0%, actual: 85.3%) (51/60)\n"
+        mock_proc.stderr = ""
+        with patch("repoaudit.tools.interrogate_tool.subprocess.run", return_value=mock_proc):
+            checks = AIReadinessChecks()
+            result = checks._check_docstring_coverage(tmp_path, "python")
+        assert result.passed is True
+        assert "85.3%" in result.message
+
+    def test_docstring_coverage_fails_below_threshold(self, tmp_path: Path) -> None:
+        from unittest.mock import patch, MagicMock
+        mock_proc = MagicMock()
+        mock_proc.returncode = 1
+        mock_proc.stdout = "RESULT: FAILED (minimum: 80.0%, actual: 32.0%) (16/50)\n"
+        mock_proc.stderr = ""
+        with patch("repoaudit.tools.interrogate_tool.subprocess.run", return_value=mock_proc):
+            checks = AIReadinessChecks()
+            result = checks._check_docstring_coverage(tmp_path, "python")
+        assert result.passed is False
+        assert "32.0%" in result.message
 
 
 # ===========================================================================
@@ -728,3 +767,149 @@ class TestComparator:
         assert "svc-2" not in result["security_patterns"]["missing_auth"]
         assert "svc-1" in result["security_patterns"]["wildcard_cors"]
         assert "svc-2" in result["security_patterns"]["wildcard_cors"]
+
+
+# ===========================================================================
+# Code quality checks
+# ===========================================================================
+
+class TestCodeQualityChecks:
+    def test_complexity_passes_when_lizard_not_installed(self, tmp_path):
+        from unittest.mock import patch
+        with patch("repoaudit.tools.lizard_tool.subprocess.run", side_effect=FileNotFoundError):
+            checks = CodeQualityChecks()
+            result = checks._check_complexity(tmp_path)
+        assert result.passed is True
+        assert "not available" in result.message
+
+    def test_complexity_passes_on_clean_output(self, tmp_path):
+        from unittest.mock import patch, MagicMock
+        # CSV with two simple functions (CCN 2 and 3)
+        csv = (
+            "10,2,50,1,20,func_a@1,module.py,func_a,module.func_a\n"
+            "8,3,40,0,15,func_b@10,module.py,func_b,module.func_b\n"
+        )
+        mock_proc = MagicMock()
+        mock_proc.returncode = 0
+        mock_proc.stdout = csv
+        mock_proc.stderr = ""
+        with patch("repoaudit.tools.lizard_tool.subprocess.run", return_value=mock_proc):
+            checks = CodeQualityChecks()
+            result = checks._check_complexity(tmp_path)
+        assert result.passed is True
+
+    def test_complexity_fails_on_very_complex_functions(self, tmp_path):
+        from unittest.mock import patch, MagicMock
+        # CCN of 20 — very complex
+        csv = "50,20,200,5,80,god_function@1,big.py,god_function,big.god_function\n"
+        mock_proc = MagicMock()
+        mock_proc.returncode = 0
+        mock_proc.stdout = csv
+        mock_proc.stderr = ""
+        with patch("repoaudit.tools.lizard_tool.subprocess.run", return_value=mock_proc):
+            checks = CodeQualityChecks()
+            result = checks._check_complexity(tmp_path)
+        assert result.passed is False
+        assert "CCN>15" in result.message
+
+    def test_maintainability_passes_when_radon_not_installed(self, tmp_path):
+        from unittest.mock import patch
+        with patch("repoaudit.tools.radon_tool.subprocess.run", side_effect=FileNotFoundError):
+            checks = CodeQualityChecks()
+            result = checks._check_maintainability(tmp_path)
+        assert result.passed is True
+
+    def test_linting_fails_on_ruff_errors(self, tmp_path):
+        import json as _json
+        from unittest.mock import patch, MagicMock
+        issues = [{"code": "E501", "message": "line too long", "filename": "app.py",
+                   "location": {"row": 1, "column": 0}}]
+        mock_proc = MagicMock()
+        mock_proc.returncode = 1
+        mock_proc.stdout = _json.dumps(issues)
+        mock_proc.stderr = ""
+        with patch("repoaudit.tools.ruff_tool.subprocess.run", return_value=mock_proc):
+            checks = CodeQualityChecks()
+            result = checks._check_linting(tmp_path)
+        assert result.passed is False
+        assert "1 error" in result.message
+
+    def test_linting_passes_on_clean_code(self, tmp_path):
+        from unittest.mock import patch, MagicMock
+        mock_proc = MagicMock()
+        mock_proc.returncode = 0
+        mock_proc.stdout = "[]"
+        mock_proc.stderr = ""
+        with patch("repoaudit.tools.ruff_tool.subprocess.run", return_value=mock_proc):
+            checks = CodeQualityChecks()
+            result = checks._check_linting(tmp_path)
+        assert result.passed is True
+
+
+# ===========================================================================
+# Bandit and pip-audit checks
+# ===========================================================================
+
+def test_bandit_skipped_for_non_python(tmp_path: Path) -> None:
+    checks = SecurityChecks()
+    result = checks._check_bandit(tmp_path, "kotlin_spring")
+    assert result.passed is True
+    assert "Python-only" in result.message
+
+
+def test_bandit_passes_when_not_installed(tmp_path: Path) -> None:
+    from unittest.mock import patch
+    with patch("repoaudit.tools.bandit_tool.subprocess.run", side_effect=FileNotFoundError):
+        checks = SecurityChecks()
+        result = checks._check_bandit(tmp_path, "python")
+    assert result.passed is True
+    assert "not available" in result.message
+
+
+def test_bandit_fails_on_high_severity(tmp_path: Path) -> None:
+    import json as _json
+    from unittest.mock import patch, MagicMock
+    output = _json.dumps({"results": [{
+        "issue_severity": "HIGH",
+        "issue_confidence": "HIGH",
+        "test_id": "B608",
+        "issue_text": "Possible SQL injection via string-based query construction.",
+        "filename": "app/db.py",
+        "line_number": 42,
+    }]})
+    mock_proc = MagicMock()
+    mock_proc.returncode = 1
+    mock_proc.stdout = output
+    mock_proc.stderr = ""
+    with patch("repoaudit.tools.bandit_tool.subprocess.run", return_value=mock_proc):
+        checks = SecurityChecks()
+        result = checks._check_bandit(tmp_path, "python")
+    assert result.passed is False
+    assert "HIGH" in result.message
+
+
+def test_pip_audit_skipped_for_non_python(tmp_path: Path) -> None:
+    checks = SecurityChecks()
+    result = checks._check_pip_audit(tmp_path, "dotnet")
+    assert result.passed is True
+
+
+def test_pip_audit_fails_on_vulnerable_package(tmp_path: Path) -> None:
+    import json as _json
+    from unittest.mock import patch, MagicMock
+    output = _json.dumps({"dependencies": [{
+        "name": "requests",
+        "version": "2.20.0",
+        "vulns": [{"id": "PYSEC-2023-74", "description": "...", "fix_versions": ["2.31.0"], "aliases": []}],
+    }]})
+    mock_proc = MagicMock()
+    mock_proc.returncode = 1
+    mock_proc.stdout = output
+    mock_proc.stderr = ""
+    # Need a requirements file so pip-audit doesn't skip
+    (tmp_path / "requirements.txt").write_text("requests==2.20.0\n")
+    with patch("repoaudit.tools.pip_audit_tool.subprocess.run", return_value=mock_proc):
+        checks = SecurityChecks()
+        result = checks._check_pip_audit(tmp_path, "python")
+    assert result.passed is False
+    assert "requests" in result.detail
