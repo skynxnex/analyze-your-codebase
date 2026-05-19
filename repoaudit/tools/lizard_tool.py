@@ -27,6 +27,10 @@ def run_lizard(repo_path: Path, timeout: int = 60) -> LizardResult:
                 "-l", "python", "-l", "javascript", "-l", "typescript",
                 "-l", "kotlin", "-l", "java", "-l", "csharp", "-l", "go",
                 "--csv",
+                "-x", "*/\\.venv/*", "-x", "*/venv/*", "-x", "*/node_modules/*",
+                "-x", "*/build/*", "-x", "*/target/*", "-x", "*/dist/*",
+                "-x", "*/.git/*", "-x", "*/migrations/*", "-x", "*/__pycache__/*",
+                "-x", "*/site-packages/*",
             ],
             capture_output=True, text=True, timeout=timeout,
         )
