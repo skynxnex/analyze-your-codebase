@@ -33,13 +33,13 @@ _CONSISTENCY_LABELS: dict[str, str] = {
 
 _CATEGORIES = ("ai_readiness", "security", "devex", "testing")
 
-# Color palette (neutral, professional)
-_COLOR_PASS = "#2d6a4f"
-_COLOR_WARN = "#b5451b"
-_COLOR_FAIL = "#c1121f"
-_COLOR_PASS_BG = "#d8f3dc"
-_COLOR_WARN_BG = "#ffe8d6"
-_COLOR_FAIL_BG = "#fce4e4"
+# Color palette (dark OLED theme)
+_COLOR_PASS = "#22C55E"
+_COLOR_WARN = "#F59E0B"
+_COLOR_FAIL = "#EF4444"
+_COLOR_PASS_BG = "#14532d22"
+_COLOR_WARN_BG = "#78350f22"
+_COLOR_FAIL_BG = "#7f1d1d22"
 
 # ---------------------------------------------------------------------------
 # Inline CSS
@@ -48,13 +48,25 @@ _COLOR_FAIL_BG = "#fce4e4"
 _CSS = """
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
+:root {
+  --bg:        #0F172A;
+  --surface:   #1E293B;
+  --surface2:  #273347;
+  --border:    #334155;
+  --text:      #F1F5F9;
+  --text-muted:#94A3B8;
+  --accent:    #22C55E;
+  --warn:      #F59E0B;
+  --fail:      #EF4444;
+  --code:      #7DD3FC;
+}
+
 body {
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
-    "Helvetica Neue", Arial, sans-serif;
+  font-family: "Fira Sans", system-ui, -apple-system, sans-serif;
   font-size: 15px;
   line-height: 1.6;
-  color: #212529;
-  background: #f8f9fa;
+  color: var(--text);
+  background: var(--bg);
 }
 
 .container {
@@ -65,9 +77,9 @@ body {
 
 /* --- Header --- */
 .header {
-  background: #ffffff;
-  border-radius: 6px;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.10);
+  background: var(--surface);
+  border-radius: 8px;
+  border: 1px solid var(--border);
   padding: 1.25rem 1.5rem;
   margin-bottom: 1.25rem;
   display: flex;
@@ -78,26 +90,26 @@ body {
 }
 
 .header-title { font-size: 1.25rem; font-weight: 700; }
-.header-title span { color: #6c757d; font-weight: 400; }
-.header-meta { font-size: 0.875rem; color: #6c757d; }
-.header-meta strong { color: #212529; }
-.header-version { font-size: 0.8125rem; color: #6c757d; align-self: center; }
+.header-title span { color: var(--text-muted); font-weight: 400; }
+.header-meta { font-size: 0.875rem; color: var(--text-muted); }
+.header-meta strong { color: var(--text); }
+.header-version { font-size: 0.8125rem; color: var(--text-muted); align-self: center; }
 
 /* --- Card base --- */
 .card {
-  background: #ffffff;
-  border-radius: 6px;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.10);
+  background: var(--surface);
+  border-radius: 8px;
+  border: 1px solid var(--border);
   padding: 1.25rem 1.5rem;
   margin-bottom: 1.25rem;
 }
 
 .card-title {
-  font-size: 0.75rem;
+  font-size: 0.7rem;
   font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: #6c757d;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
   margin-bottom: 0.75rem;
 }
 
@@ -110,17 +122,19 @@ body {
   margin-bottom: 0.375rem;
 }
 .score-value { font-size: 2rem; font-weight: 700; }
-.score-max { font-size: 1rem; color: #6c757d; }
+.score-max { font-size: 1rem; color: var(--text-muted); }
 .score-bar-track {
   height: 12px;
   border-radius: 6px;
-  background: #e9ecef;
+  background: var(--bg);
   overflow: hidden;
 }
 .score-bar-fill {
   height: 100%;
   border-radius: 6px;
-  transition: width 0.3s ease;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .score-bar-fill { transition: width 0.3s ease; }
 }
 .score-pass { background: """ + _COLOR_PASS + """; }
 .score-warn { background: """ + _COLOR_WARN + """; }
@@ -135,17 +149,17 @@ body {
 }
 .category-card {
   flex: 1 1 160px;
-  background: #ffffff;
-  border-radius: 6px;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.10);
+  background: var(--surface);
+  border-radius: 8px;
+  border: 1px solid var(--border);
   padding: 1rem 1.25rem;
 }
 .category-name {
-  font-size: 0.75rem;
+  font-size: 0.7rem;
   font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: #6c757d;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
   margin-bottom: 0.375rem;
 }
 .category-score {
@@ -156,7 +170,7 @@ body {
 .category-bar-track {
   height: 6px;
   border-radius: 3px;
-  background: #e9ecef;
+  background: var(--bg);
   overflow: hidden;
 }
 .category-bar-fill {
@@ -170,14 +184,16 @@ body {
   font-size: 0.6875rem;
   font-weight: 600;
   padding: 0.1em 0.5em;
-  border-radius: 3px;
+  border-radius: 6px;
   vertical-align: middle;
   margin-left: 0.375rem;
 }
-.pill-ai_readiness { background: #e7f5ff; color: #1864ab; }
-.pill-security     { background: #fff3bf; color: #7c5c00; }
-.pill-devex        { background: #e6fcf5; color: #0c5e47; }
-.pill-testing      { background: #f8f0fc; color: #6741d9; }
+.pill-ai_readiness    { background: #1e3a5f; color: #7DD3FC; }
+.pill-security        { background: #3d2000; color: #FBBF24; }
+.pill-devex           { background: #1a3d2b; color: #4ADE80; }
+.pill-testing         { background: #2d1b69; color: #C4B5FD; }
+.pill-code_quality    { background: #1e2d3d; color: #93C5FD; }
+.pill-service_security{ background: #2d1a1a; color: #FCA5A5; }
 
 /* --- Findings --- */
 .finding {
@@ -185,20 +201,20 @@ body {
   border-radius: 5px;
   margin-bottom: 0.625rem;
 }
-.finding-required { background: """ + _COLOR_FAIL_BG + """; border-left: 3px solid """ + _COLOR_FAIL + """; }
-.finding-recommended { background: """ + _COLOR_WARN_BG + """; border-left: 3px solid """ + _COLOR_WARN + """; }
-.finding-optional { background: #f1f3f5; border-left: 3px solid #adb5bd; }
+.finding-required    { background: rgba(239,68,68,0.08);   border-left: 3px solid #EF4444; }
+.finding-recommended { background: rgba(245,158,11,0.08);  border-left: 3px solid #F59E0B; }
+.finding-optional    { background: rgba(148,163,184,0.06); border-left: 3px solid #475569; }
 
 .finding-name {
-  font-family: ui-monospace, "Cascadia Code", "Source Code Pro",
-    Menlo, Consolas, monospace;
-  font-size: 0.875rem;
+  font-family: "Fira Code", ui-monospace, monospace;
+  font-size: 0.8rem;
   font-weight: 600;
+  color: var(--code);
 }
 .finding-message { font-size: 0.9rem; margin-top: 0.2rem; }
 .finding-detail {
   font-size: 0.8125rem;
-  color: #495057;
+  color: var(--text-muted);
   margin-top: 0.25rem;
 }
 
@@ -208,7 +224,7 @@ body {
   text-transform: uppercase;
   letter-spacing: 0.05em;
   margin-bottom: 0.625rem;
-  color: #495057;
+  color: var(--text-muted);
 }
 
 /* --- Passed list --- */
@@ -216,13 +232,12 @@ body {
 .passed-category {
   font-size: 0.8125rem;
   font-weight: 600;
-  color: #495057;
+  color: var(--text-muted);
 }
 .passed-names {
-  font-family: ui-monospace, "Cascadia Code", "Source Code Pro",
-    Menlo, Consolas, monospace;
+  font-family: "Fira Code", ui-monospace, monospace;
   font-size: 0.8rem;
-  color: #6c757d;
+  color: #4ADE80;
 }
 
 /* --- Table --- */
@@ -235,18 +250,19 @@ table {
 th, td {
   padding: 0.5rem 0.75rem;
   text-align: left;
-  border-bottom: 1px solid #e9ecef;
+  border-bottom: 1px solid var(--border);
 }
 th {
   font-size: 0.75rem;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  color: #6c757d;
-  background: #f8f9fa;
+  color: var(--text-muted);
+  background: var(--surface2);
 }
 tr:last-child td { border-bottom: none; }
-tr:hover td { background: #f8f9fa; }
+tr:hover td { background: #1a2438; }
+tbody tr:nth-child(even) td { background: #1a2438; }
 
 /* --- Status chip --- */
 .chip {
@@ -256,38 +272,44 @@ tr:hover td { background: #f8f9fa; }
   padding: 0.1em 0.45em;
   border-radius: 3px;
 }
-.chip-pass { background: """ + _COLOR_PASS_BG + """; color: """ + _COLOR_PASS + """; }
-.chip-warn { background: """ + _COLOR_WARN_BG + """; color: """ + _COLOR_WARN + """; }
-.chip-fail { background: """ + _COLOR_FAIL_BG + """; color: """ + _COLOR_FAIL + """; }
+.chip-pass { background: rgba(34,197,94,0.15);  color: """ + _COLOR_PASS + """; }
+.chip-warn { background: rgba(245,158,11,0.15); color: """ + _COLOR_WARN + """; }
+.chip-fail { background: rgba(239,68,68,0.15);  color: """ + _COLOR_FAIL + """; }
 
 /* --- details/summary (collapsible) --- */
 details { margin-bottom: 0.875rem; }
 details > summary {
   cursor: pointer;
   padding: 0.75rem 1rem;
-  background: #ffffff;
-  border-radius: 6px;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.10);
+  background: var(--surface);
+  border-radius: 8px;
+  border: 1px solid var(--border);
   font-weight: 600;
   list-style: none;
   display: flex;
   justify-content: space-between;
   align-items: center;
   user-select: none;
+  transition: background 150ms ease;
+}
+details > summary:hover { background: var(--surface2); }
+details > summary:focus-visible {
+  outline: 2px solid #22C55E;
+  outline-offset: 2px;
 }
 details > summary::-webkit-details-marker { display: none; }
-details > summary::after { content: "▸"; color: #6c757d; font-size: 0.875rem; }
-details[open] > summary::after { content: "▾"; }
+details > summary::after { content: "\\25B8"; color: #22C55E; font-size: 0.875rem; }
+details[open] > summary::after { content: "\\25BE"; }
 details[open] > summary {
-  border-radius: 6px 6px 0 0;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.10);
+  border-radius: 8px 8px 0 0;
+  border-bottom-color: transparent;
 }
 .details-body {
-  background: #ffffff;
-  border-radius: 0 0 6px 6px;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.10);
+  background: var(--surface);
+  border-radius: 0 0 8px 8px;
+  border: 1px solid var(--border);
+  border-top: none;
   padding: 1rem 1.25rem;
-  border-top: 1px solid #f1f3f5;
 }
 
 /* --- Testing / Security pattern sections --- */
@@ -296,7 +318,7 @@ details[open] > summary {
   align-items: baseline;
   gap: 0.75rem;
   padding: 0.375rem 0;
-  border-bottom: 1px solid #f1f3f5;
+  border-bottom: 1px solid var(--border);
 }
 .gap-item:last-of-type { border-bottom: none; }
 .gap-label {
@@ -307,21 +329,20 @@ details[open] > summary {
 }
 .gap-repos {
   font-size: 0.8125rem;
-  color: #495057;
-  font-family: ui-monospace, "Cascadia Code", "Source Code Pro",
-    Menlo, Consolas, monospace;
+  color: var(--text-muted);
+  font-family: "Fira Code", ui-monospace, monospace;
 }
 .pattern-summary {
   margin-top: 0.875rem;
   font-size: 0.875rem;
-  color: #6c757d;
+  color: var(--text-muted);
   font-style: italic;
 }
 
 /* --- Language security gaps --- */
 .lang-gap {
   padding: 0.75rem 0;
-  border-bottom: 1px solid #f1f3f5;
+  border-bottom: 1px solid var(--border);
 }
 .lang-gap:last-child { border-bottom: none; }
 .lang-badge {
@@ -329,31 +350,29 @@ details[open] > summary {
   font-size: 0.75rem;
   font-weight: 700;
   padding: 0.15em 0.55em;
-  border-radius: 3px;
-  background: #e7f5ff;
-  color: #1864ab;
+  border-radius: 6px;
+  background: #1e3a5f;
+  color: #7DD3FC;
   margin-right: 0.5rem;
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
 .lang-repos {
   font-size: 0.8125rem;
-  color: #6c757d;
-  font-family: ui-monospace, "Cascadia Code", "Source Code Pro",
-    Menlo, Consolas, monospace;
+  color: var(--text-muted);
+  font-family: "Fira Code", ui-monospace, monospace;
   margin-top: 0.25rem;
 }
 .lang-gap ul {
   margin: 0.375rem 0 0 1.25rem;
   font-size: 0.8125rem;
-  color: #495057;
+  color: var(--text-muted);
 }
 
 /* --- Print --- */
 @media print {
-  .card, .category-card, details > summary, .details-body,
-  .header, .finding { box-shadow: none; }
-  body { background: #ffffff; }
+  body { background: #fff; color: #000; }
+  .card, .category-card, .header { background: #fff; border: 1px solid #ccc; }
   details { page-break-inside: avoid; }
 }
 
@@ -409,8 +428,10 @@ def _page(title: str, body: str) -> str:
         '<html lang="en">\n'
         "<head>\n"
         '  <meta charset="UTF-8">\n'
-        '  <meta name="viewport" content="width=device-width, initial-scale=1.0">\n'
+        '  <meta name="viewport" content="width=device-width, initial-scale=1">\n'
         f"  <title>{_e(title)}</title>\n"
+        '  <link rel="preconnect" href="https://fonts.googleapis.com">\n'
+        '  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Fira+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">\n'
         "  <style>\n"
         f"{_CSS}"
         "  </style>\n"
