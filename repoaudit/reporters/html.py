@@ -431,19 +431,35 @@ def _page(title: str, body: str) -> str:
 
 def _render_header_single(fp: dict) -> str:
     repo_name = fp.get("repo_name", "unknown")
+    repo_path = fp.get("repo_path", "")
+    git_remote = fp.get("git_remote", "")
+    git_branch = fp.get("git_branch", "")
     language_info = fp.get("language", {})
     lang_label = language_info.get("language", "unknown").replace("_", "/")
     file_count = fp.get("file_count", 0)
     has_git = fp.get("has_git", False)
-    git_badge = "Git ✓" if has_git else "No git"
+
+    # Build repo identity line — prefer remote URL, fall back to path
+    if git_remote:
+        repo_identity = git_remote
+    elif repo_path:
+        repo_identity = repo_path
+    else:
+        repo_identity = repo_name
+
+    branch_badge = f" &nbsp;&#x2387;&nbsp; <code>{_e(git_branch)}</code>" if git_branch else ""
+    git_badge = f"Git &#10003;{branch_badge}" if has_git else "No git"
 
     return (
         '<div class="header">\n'
         f'  <div class="header-title">repoaudit &mdash; <span>{_e(repo_name)}</span></div>\n'
+        f'  <div class="header-meta" style="font-size:0.78rem;color:#6c757d;margin-bottom:0.2rem">'
+        f'<code style="font-size:0.78rem">{_e(repo_identity)}</code>'
+        f"  </div>\n"
         f'  <div class="header-meta">'
         f"Language: <strong>{_e(lang_label)}</strong> &nbsp;&middot;&nbsp; "
         f"Files: <strong>{file_count}</strong> &nbsp;&middot;&nbsp; "
-        f"<strong>{git_badge}</strong>"
+        f"{git_badge}"
         f"  </div>\n"
         f'  <div class="header-version">v{_e(_VERSION)}</div>\n'
         "</div>\n"
